@@ -1,0 +1,15 @@
+name = "ajusta-e-image-cdn"
+main = "image-worker.js"
+compatibility_date = "2026-10-09"
+
+[[r2_buckets]]
+binding = "IMAGENS"
+bucket_name = "ajustae"
+
+[[kv_namespaces]]
+binding = "ASSINATURAS"
+id = "a2bbbdc1a5d04bdbb32ab461ef32db64"
+
+[vars]
+R2_BUCKET_NAME = "ajustae"
+CDN_SIGNING_MASTER_CURRENT_ID = "master-v1"

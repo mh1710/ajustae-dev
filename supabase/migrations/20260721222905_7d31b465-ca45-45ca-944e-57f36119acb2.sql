@@ -1,0 +1,1 @@
+ALTER TABLE public.bling_push_queue ALTER COLUMN bling_product_id DROP NOT NULL;

@@ -1,0 +1,2 @@
+ALTER TABLE public.bling_push_queue DROP CONSTRAINT bling_push_queue_tipo_check;
+ALTER TABLE public.bling_push_queue ADD CONSTRAINT bling_push_queue_tipo_check CHECK (tipo = ANY (ARRAY['preco'::text,'estoque'::text,'produto'::text,'criar'::text,'excluir'::text,'inativar'::text,'preco_loja'::text,'estoque_loja'::text,'vincular_loja'::text,'desvincular_loja'::text]));

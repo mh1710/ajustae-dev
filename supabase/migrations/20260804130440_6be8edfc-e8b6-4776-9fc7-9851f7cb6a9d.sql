@@ -1,0 +1,1 @@
+DELETE FROM public.ml_product_matches WHERE error IS NOT NULL;

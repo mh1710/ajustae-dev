@@ -1,0 +1,28 @@
+-- Defense in depth: explicitly scope restricted reads without widening existing permissive policies.
+BEGIN;
+ALTER POLICY company_restricted_read ON public.bling_product_suppliers USING (NOT public.is_company_restricted() OR (app_private.is_company_member(company_id, auth.uid())));
+ALTER POLICY company_restricted_read ON public.ai_transform_jobs USING (NOT public.is_company_restricted() OR (app_private.is_company_member(company_id, auth.uid())));
+ALTER POLICY company_restricted_read ON public.bling_stores USING (NOT public.is_company_restricted() OR (app_private.is_company_member(company_id, auth.uid())));
+ALTER POLICY company_restricted_read ON public.bling_existence_jobs USING (NOT public.is_company_restricted() OR (app_private.is_company_member(company_id, auth.uid())));
+ALTER POLICY company_restricted_read ON public.companies USING (NOT public.is_company_restricted() OR (app_private.is_company_member(id, auth.uid())));
+ALTER POLICY company_restricted_read ON public.bling_existence_items USING (NOT public.is_company_restricted() OR (app_private.is_company_member(company_id, auth.uid())));
+ALTER POLICY company_restricted_read ON public.company_users USING (NOT public.is_company_restricted() OR (user_id = auth.uid()));
+ALTER POLICY company_restricted_read ON public.profiles USING (NOT public.is_company_restricted() OR (id = auth.uid()));
+ALTER POLICY company_restricted_read ON public.bling_sync_jobs USING (NOT public.is_company_restricted() OR (app_private.is_company_member(company_id, auth.uid())));
+ALTER POLICY company_restricted_read ON public.audit_runs USING (NOT public.is_company_restricted() OR (app_private.is_company_member(company_id, auth.uid())));
+ALTER POLICY company_restricted_read ON public.validation_rules USING (NOT public.is_company_restricted() OR (company_id IS NULL OR app_private.is_company_member(company_id, auth.uid())));
+ALTER POLICY company_restricted_read ON public.audit_results USING (NOT public.is_company_restricted() OR (app_private.is_company_member(company_id, auth.uid())));
+ALTER POLICY company_restricted_read ON public.bling_push_queue USING (NOT public.is_company_restricted() OR (app_private.is_company_member(company_id, auth.uid())));
+ALTER POLICY company_restricted_read ON public.bling_products USING (NOT public.is_company_restricted() OR (app_private.is_company_member(company_id, auth.uid())));
+ALTER POLICY company_restricted_read ON public.bling_store_sync_jobs USING (NOT public.is_company_restricted() OR (app_private.is_company_member(company_id, auth.uid())));
+ALTER POLICY company_restricted_read ON public.fornecedores USING (NOT public.is_company_restricted() OR (company_id IS NULL OR app_private.is_company_member(company_id, auth.uid())));
+ALTER POLICY company_restricted_read ON public.bling_product_stores USING (NOT public.is_company_restricted() OR (app_private.is_company_member(company_id, auth.uid())));
+ALTER POLICY company_restricted_read ON public.pricing_settings USING (NOT public.is_company_restricted() OR (app_private.is_company_member(company_id, auth.uid())));
+ALTER POLICY company_restricted_read ON public.bling_order_items USING (NOT public.is_company_restricted() OR (app_private.is_company_member(company_id, auth.uid())));
+ALTER POLICY company_restricted_read ON public.bling_orders_sync_state USING (NOT public.is_company_restricted() OR (app_private.is_company_member(company_id, auth.uid())));
+ALTER POLICY company_restricted_read ON public.bling_orders_sync_jobs USING (NOT public.is_company_restricted() OR (app_private.is_company_member(company_id, auth.uid())));
+ALTER POLICY company_restricted_read ON public.user_permissions USING (NOT public.is_company_restricted() OR (user_id = auth.uid()));
+ALTER POLICY company_restricted_read ON public.dre_expenses USING (NOT public.is_company_restricted() OR (app_private.is_company_member(company_id, auth.uid())));
+ALTER POLICY company_restricted_read ON public.bling_orders USING (NOT public.is_company_restricted() OR (app_private.is_company_member(company_id, auth.uid())));
+ALTER POLICY company_restricted_read ON public.user_roles USING (NOT public.is_company_restricted() OR (user_id = auth.uid()));
+COMMIT;

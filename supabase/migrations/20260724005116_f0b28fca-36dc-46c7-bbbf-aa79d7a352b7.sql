@@ -1,0 +1,1 @@
+ALTER FUNCTION public.enqueue_bling_link_store(uuid, uuid[], text, text) SET statement_timeout = '300s';

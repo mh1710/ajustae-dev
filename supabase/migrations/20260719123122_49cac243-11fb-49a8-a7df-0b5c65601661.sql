@@ -1,0 +1,1 @@
+UPDATE public.bling_store_sync_jobs SET status='cancelada', finished_at=now(), last_error=COALESCE(last_error,'Cancelado manualmente (worker travado)') WHERE status IN ('pendente','processando');

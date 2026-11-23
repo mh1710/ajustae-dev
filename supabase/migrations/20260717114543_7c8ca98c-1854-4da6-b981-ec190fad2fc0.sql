@@ -1,0 +1,1 @@
+UPDATE public.audit_runs SET status='cancelada', finished_at=now() WHERE status='processando';

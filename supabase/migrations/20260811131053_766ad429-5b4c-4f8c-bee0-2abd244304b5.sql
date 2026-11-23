@@ -1,0 +1,1 @@
+UPDATE public.user_permissions SET can_use_ai = true WHERE can_use_ai = false;
