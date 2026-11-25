@@ -20,7 +20,7 @@ NANGO_SECONDARY_OUTLOOK_INTEGRATION_ID=
 NANGO_CONNECTIONS_PER_KEY=10
 ```
 
-5. Aplique a migration `20261124100000_nango_credential_pool.sql` antes de
+5. Aplique a migration `20261125094233_nango_credential_pool.sql` antes de
    habilitar a segunda chave.
 6. Reinicie o servidor e abra **Códigos de e-mail**. Enquanto o slot 1 tiver
    menos conexões ativas que o limite, ele será usado; depois, novas conexões

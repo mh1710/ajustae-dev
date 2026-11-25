@@ -121,7 +121,7 @@ export const startEmailConnection = createServerFn({ method: "POST" })
           .eq("status", "connected");
         if (activeConnectionsError) {
           throw new Error(
-            "A segunda credencial Nango exige a migration 20261124100000_nango_credential_pool.sql.",
+            "A segunda credencial Nango exige a migration 20261125094233_nango_credential_pool.sql.",
           );
         }
         const activeBySlot = (activeConnections ?? []).reduce(
@@ -209,7 +209,7 @@ export const completeNangoEmailConnection = createServerFn({ method: "POST" })
     const supportsCredentialSlot = !credentialSlotProbeError;
     if (!supportsCredentialSlot && data.credential_slot === 2) {
       throw new Error(
-        "Aplique a migration 20261124100000_nango_credential_pool.sql antes de usar a segunda credencial Nango.",
+        "Aplique a migration 20261125094233_nango_credential_pool.sql antes de usar a segunda credencial Nango.",
       );
     }
     if (email) {
