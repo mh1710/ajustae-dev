@@ -1,4 +1,11 @@
 # Roadmap
+- [ ] Garimpo pela Amazon: pesquisa por palavra-chave/departamento, só ofertas Prime, custo, EAN, fotos e medidas da Amazon; cadastro AMZ + EAN com fornecedor Amazon; estoque diário pela Amazon.
+- [x] Garimpo Anatel pela base própria: EAN (com/sem zeros), SKU de fornecedor/Bling com o mesmo EAN e base oficial por modelo + marca. Teste com 15 sem Anatel: nenhum encontrado (base não tem esses EANs/marcas). Publicação pendente.
+- [x] Garimpo sem IA: preparação completa dados só com fornecedores, Bling, catálogo do Mercado Livre e Amazon pelo mesmo EAN; pesquisa com IA removida. Teste real com 12 SOS sem enviar ao Bling: 6 completos; 3 sem Anatel (carregadores/aspirador) e 3 sem medidas. Publicação pendente.
+- [ ] Login seguro (Amazon): senha 12+ com letra/número/especial, troca anual e código por e-mail em cada entrada; e-mail do código por conta no painel admin. Fluxo testado com conta temporária (bloqueio no banco, código errado, senha fraca recusada, senha nova, entrada no painel). Bloqueado: domínio de e-mail do sistema ainda não configurado (envio do código desligado); depois publicar e ligar a exigência para todos.
+- [x] Garimpo + Amazon: ao importar, a Amazon (mesmo EAN) completa NCM, marca, peso, medidas, descrição e fotos; envio só com auditoria aprovada, até 30 kg e 70 cm. Teste com 40 garimpados incompletos: 15 achados, 12 NCM, 14 medidas/peso; preparação real de 2 produtos completou tudo sem enviar ao Bling. Publicação pendente.
+- [ ] Amazon no scanner de Novos do fornecedor: aguardando o usuário.
+- [x] Novos do fornecedor: scanner por fornecedor (mesma busca/auditoria sem cadastrar), coluna Prontos no scanner e botão Importar prontos; fotos do mesmo EAN em produtos ativos de outras empresas; descrição não é mais apagada pela linha de garantia. Teste real SOS: Hayamax 104/200 e Evolusom 74/200 prontos; tela autenticada não verificada; publicação pendente.
 - [x] Garimpo: selecionar todos carrega os IDs de todas as páginas, com contagem total e limpeza; preparação/importação mantém os 100% completos. Oito testes passaram e build OK; tela/importação real não verificadas sem sessão do banco externo.
 - [x] Garimpo 403: reproduzido em três anúncios; users/me, catálogo, ofertas e frete 200, detalhes /items 403 access_denied; multiget e projeção também recusados. EAN publicado no catálogo agora sobrevive ao bloqueio do anúncio; ausência de EAN recebe motivo explícito sem inventar identidade nem repetir 403. 57 testes passaram e build OK; bloqueio externo persiste, publicação e conferência autenticada pendentes.
 - [x] Garimpo: peso/medidas ausentes recuperados em até seis anúncios e cinco catálogos por EAN publicado exato, incluindo ofertas fora do frete/custo escolhido; valores existentes preservados, doadores conflitantes e variações cruzadas bloqueados, limites reaplicados e fontes registradas. Mesma conferência antes do cadastro; 55 testes passaram, build OK. Consulta real e tela não verificadas sem sessão externa; publicação pendente.
@@ -86,3 +93,8 @@
 - [x] Garimpo: motivo separado de custo e prazo, com prazo real mais rápido
 - [x] Garimpo: EAN pela busca de catálogo do Mercado Livre (mesmo ID) e coleta rápida que completa fotos pelo fornecedor antes do cadastro
 - [x] Garimpo: ao importar, buscar NCM, Anatel, marca, medidas, fotos e descrição, conferir cada produto e cadastrar o fornecedor Mercado Livre no Bling
+- [x] Exportação de vínculo multiloja (planilha completa ou a cada 1000)
+- [x] Novos do fornecedor: listar por fornecedor os produtos fora do catálogo da empresa (custo >10 e <1000, peso <30 kg, comprimento ≤70 cm), completar campos pelo ML por EAN e importar só os que passam nas regras
+- [x] Cópia entre lojas: preço pelas regras da empresa de destino; sem preço calculável não importa; Bling nunca recebe cadastro com preço 0
+- [x] Empresas sem marketplace padrão usam Web Continental (Casa Castro)
+- [x] Corrigir produtos ativos com preço 0 (Casa Castro e Casa Mix enviados; Casa Ipiranga na fila após 429)

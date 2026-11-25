@@ -295,6 +295,8 @@ export const importCrossCompanyProducts = createServerFn({ method: "POST" })
       row.dirty = true;
       row.detail_synced = false;
       if (data.zero_stock) row.estoque = 0;
+      // Preço de venda vem das regras da empresa de destino, nunca da origem.
+      row.preco = 0;
       payload.push(row);
     }
 
@@ -311,10 +313,36 @@ export const importCrossCompanyProducts = createServerFn({ method: "POST" })
       for (const r of (ins ?? []) as { id: string }[]) insertedIds.push(r.id);
     }
 
+    // Precifica pelas regras da empresa de destino; o que não tiver preço calculável não fica.
+    let noPrice = 0;
+    let keptIds = insertedIds;
+    if (insertedIds.length) {
+      const { error: priceErr } = await supabaseAdmin.rpc("transform_update_price_stock" as never, {
+        _company_id: data.company_id, _product_ids: insertedIds, _include_stores: false,
+        _run_id: null, _only_stock: false, _only_price: true,
+      } as never);
+      if (priceErr) {
+        await supabaseAdmin.from("bling_products").delete().in("id", insertedIds).eq("source", "copia_empresa");
+        throw new Error(`Não foi possível precificar os produtos: ${priceErr.message}`);
+      }
+      const priced = await fetchAll<{ id: string; preco: number | null }>((a, b) =>
+        supabaseAdmin.from("bling_products").select("id, preco").in("id", insertedIds).order("id").range(a, b),
+      );
+      const unpriced = priced.filter((r) => !(Number(r.preco) > 0)).map((r) => r.id);
+      for (let i = 0; i < unpriced.length; i += 200) {
+        await supabaseAdmin.from("bling_products").delete().in("id", unpriced.slice(i, i + 200))
+          .eq("source", "copia_empresa").is("bling_product_id", null);
+      }
+      noPrice = unpriced.length;
+      const drop = new Set(unpriced);
+      keptIds = insertedIds.filter((id) => !drop.has(id));
+    }
+
     return {
-      inserted: insertedIds.length,
+      inserted: keptIds.length,
       skipped: sources.length - insertedIds.length,
-      ids: insertedIds,
+      no_price: noPrice,
+      ids: keptIds,
     };
   });
 

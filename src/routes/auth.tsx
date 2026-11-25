@@ -1,6 +1,7 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { z } from "zod";
+import { Loader2 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -8,7 +9,9 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { toast } from "sonner";
 import logo from "@/assets/ajusta-e-logo-new.png.asset.json";
-import { getCompanySession } from "@/lib/company-session";
+import { LoginCodeStep, NewPasswordStep } from "@/components/login-security-steps";
+import type { SecurityState } from "@/lib/account-security.functions";
+import { clearSecurityState, fetchSecurityState, rememberSecurityState } from "@/lib/security-gate";
 
 const searchSchema = z.object({ mode: z.enum(["login", "signup"]).optional() });
 
@@ -18,14 +21,51 @@ export const Route = createFileRoute("/auth")({
   component: AuthPage,
 });
 
+type Step = "loading" | "login" | "code" | "password";
+
+const DESCRIPTIONS: Record<Step, string> = {
+  loading: "Conferindo seu acesso…",
+  login: "Entre com sua conta para acessar o painel.",
+  code: "Confirme que é você com o código enviado por e-mail.",
+  password: "Defina uma senha nova para continuar.",
+};
+
 function AuthPage() {
   const navigate = useNavigate();
+  const [step, setStep] = useState<Step>("loading");
+  const [state, setState] = useState<SecurityState | null>(null);
+  const [loginPassword, setLoginPassword] = useState<string | undefined>();
 
-  useEffect(() => {
-    getCompanySession().then(session => {
-      if (session) navigate({ to: session.restricted ? "/produtos" : "/dashboard", replace: true });
-    });
+  const proceed = useCallback((next: SecurityState) => {
+    setState(next);
+    if (next.ok) {
+      rememberSecurityState(next);
+      setLoginPassword(undefined);
+      navigate({ to: next.restricted ? "/produtos" : "/dashboard", replace: true });
+      return;
+    }
+    setStep(next.mfa_verified ? "password" : "code");
   }, [navigate]);
+
+  const check = useCallback(async () => {
+    try {
+      const next = await fetchSecurityState(true);
+      if (!next) return setStep("login");
+      proceed(next);
+    } catch {
+      setStep("login");
+    }
+  }, [proceed]);
+
+  useEffect(() => { void check(); }, [check]);
+
+  async function signOut() {
+    clearSecurityState();
+    setLoginPassword(undefined);
+    await supabase.auth.signOut({ scope: "local" });
+    setState(null);
+    setStep("login");
+  }
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-muted/40 px-4 py-12">
@@ -33,27 +73,43 @@ function AuthPage() {
         <CardHeader className="text-center">
           <img src={logo.url} alt="Ajusta-Ê" className="mx-auto mb-2 h-28 w-auto object-contain" />
           <CardTitle className="sr-only">Ajusta-Ê</CardTitle>
-          <CardDescription>
-            Entre com sua conta para acessar o painel.
-          </CardDescription>
+          <CardDescription>{DESCRIPTIONS[step]}</CardDescription>
         </CardHeader>
         <CardContent>
-          <LoginForm onSuccess={async () => {
-            const session = await getCompanySession();
-            navigate({ to: session?.restricted ? "/produtos" : "/dashboard", replace: true });
-          }} />
-          <div className="mt-6 text-center text-sm">
-            <Link to="/forgot-password" className="text-muted-foreground hover:text-foreground">
-              Esqueci minha senha
-            </Link>
-          </div>
+          {step === "loading" && (
+            <div className="flex h-24 items-center justify-center text-muted-foreground">
+              <Loader2 className="h-5 w-5 animate-spin" />
+            </div>
+          )}
+          {step === "login" && (
+            <>
+              <LoginForm onSuccess={async (password) => {
+                setLoginPassword(password);
+                await check();
+              }} />
+              <div className="mt-6 text-center text-sm">
+                <Link to="/forgot-password" className="text-muted-foreground hover:text-foreground">
+                  Esqueci minha senha
+                </Link>
+              </div>
+            </>
+          )}
+          {step === "code" && state && <LoginCodeStep state={state} onVerified={proceed} onCancel={signOut} />}
+          {step === "password" && (
+            <NewPasswordStep
+              currentPassword={loginPassword}
+              reason="Por segurança, a senha precisa ter pelo menos 12 caracteres com letra, número e caractere especial, e é trocada uma vez por ano. Escolha uma senha nova para esta conta."
+              onDone={proceed}
+              onCancel={signOut}
+            />
+          )}
         </CardContent>
       </Card>
     </div>
   );
 }
 
-function LoginForm({ onSuccess }: { onSuccess: () => void }) {
+function LoginForm({ onSuccess }: { onSuccess: (password: string) => void | Promise<void> }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
@@ -61,11 +117,14 @@ function LoginForm({ onSuccess }: { onSuccess: () => void }) {
   async function handle(e: React.FormEvent) {
     e.preventDefault();
     setLoading(true);
+    clearSecurityState();
     const { error } = await supabase.auth.signInWithPassword({ email, password });
+    if (error) {
+      setLoading(false);
+      return toast.error(error.message === "Invalid login credentials" ? "E-mail ou senha incorretos." : error.message);
+    }
+    await onSuccess(password);
     setLoading(false);
-    if (error) return toast.error(error.message);
-    toast.success("Bem-vindo!");
-    onSuccess();
   }
 
   return (

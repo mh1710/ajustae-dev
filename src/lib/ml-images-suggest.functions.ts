@@ -29,22 +29,15 @@ export type MlImageSuggestion = {
   error?: string;
 };
 
-// Poucas consultas simultâneas ao ML por servidor; 429/5xx esperam e tentam de novo.
+// Poucas consultas simultâneas por servidor; a cota da aplicação e os 429 ficam com o controle central.
 let mlActive = 0;
 const mlWaiters: Array<() => void> = [];
 async function mlFetch(url: string, token: string): Promise<Response> {
   while (mlActive >= 2) await new Promise<void>((r) => mlWaiters.push(r));
   mlActive++;
   try {
-    let last: Response | null = null;
-    for (let attempt = 0; attempt < 5; attempt++) {
-      last = await fetch(url, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(15_000) });
-      if (last.status !== 429 && last.status < 500) return last;
-      const retryAfter = Number(last.headers.get("retry-after"));
-      const wait = Number.isFinite(retryAfter) && retryAfter > 0 ? Math.min(retryAfter * 1000, 10_000) : 800 * 2 ** attempt + Math.random() * 400;
-      await new Promise((r) => setTimeout(r, wait));
-    }
-    return last!;
+    const { mlFetch: sharedMlFetch } = await import("@/lib/ml-http.server");
+    return await sharedMlFetch(url, { token, maxRetries: 4 });
   } finally {
     mlActive--;
     mlWaiters.shift()?.();
@@ -55,7 +48,10 @@ async function findByEan(token: string, ean: string, min: number, max: number) {
   const { withoutVisualPlaceholders } = await import("@/lib/image-fingerprint.server");
   const r = await mlFetch(`${ML_API}/products/search?site_id=MLB&status=active&product_identifier=${ean}`, token);
   if (r.status === 429) throw new Error("Mercado Livre está limitando as consultas agora (429). Busque este produto novamente em alguns minutos.");
-  if (!r.ok) throw new Error(`Mercado Livre respondeu ${r.status}`);
+  if (!r.ok) {
+    const { mlHttpError } = await import("@/lib/ml-http.server");
+    throw await mlHttpError(r, "Mercado Livre recusou a busca de fotos");
+  }
   const results = (((await r.json()) as any)?.results ?? []) as any[];
   let best: { nome: string | null; imagens: string[] } | null = null;
   for (const x of results.slice(0, 5)) {

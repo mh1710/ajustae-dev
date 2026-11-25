@@ -3,6 +3,8 @@
  * Guarda tokens em public.ml_integration (linha única) e renova automaticamente.
  */
 
+import { mlFetch, MlTransientError } from "./ml-http.server";
+
 const ML_API = "https://api.mercadolibre.com";
 const ML_AUTH = "https://auth.mercadolivre.com.br/authorization";
 const SITE = "MLB";
@@ -41,13 +43,14 @@ type TokenResponse = {
 };
 
 async function postToken(body: Record<string, string>): Promise<TokenResponse> {
-  const res = await fetch(`${ML_API}/oauth/token`, {
+  const res = await mlFetch(`${ML_API}/oauth/token`, {
     method: "POST",
     headers: {
       "Content-Type": "application/x-www-form-urlencoded",
       accept: "application/json",
     },
     body: new URLSearchParams(body).toString(),
+    maxRetries: 1,
   });
   const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
   if (!res.ok) {
@@ -173,20 +176,14 @@ type MlItem = {
 
 type MlCatalogResult = { id?: string; catalog_product_id?: string; name?: string };
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-/** GET no ML com retry/backoff em 429 e 5xx (limite oficial: ~1.500 req/min por app). */
-async function mlGet(token: string, url: string, attempt = 0): Promise<Record<string, unknown> | null> {
-  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-  if (res.status === 429 || res.status >= 500) {
-    if (attempt >= 3) throw new Error(res.status === 429 ? "rate_limit" : `HTTP ${res.status}`);
-    const retryAfter = Number(res.headers.get("retry-after"));
-    const wait = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 400 * 2 ** attempt;
-    await sleep(Math.min(wait, 3000));
-    return mlGet(token, url, attempt + 1);
-  }
+/** GET no ML pela cota compartilhada da aplicação (18.000/h), com espera em 429 e 5xx. */
+async function mlGet(token: string, url: string): Promise<Record<string, unknown> | null> {
+  const res = await mlFetch(url, { token });
   if (res.status === 404) return null;
-  if (!res.ok) throw new Error(`Busca ML falhou (HTTP ${res.status})`);
+  if (!res.ok) {
+    const { mlHttpError } = await import("./ml-http.server");
+    throw await mlHttpError(res, "Busca ML falhou");
+  }
   return (await res.json()) as Record<string, unknown>;
 }
 
@@ -239,7 +236,9 @@ async function shippingCost(token: string, itemId: string, zip: string): Promise
       .map((o) => (typeof o.cost === "number" ? o.cost : o.list_cost))
       .filter((c): c is number => typeof c === "number");
     return costs.length ? Math.min(...costs) : null;
-  } catch {
+  } catch (e) {
+    // Limite do ML não pode virar "frete desconhecido": a consulta toda tenta de novo depois.
+    if (e instanceof MlTransientError) throw e;
     return null;
   }
 }

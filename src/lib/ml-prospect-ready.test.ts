@@ -17,7 +17,7 @@ describe("somente produtos 100% vão para a importação", () => {
     expect(preparedIssues(complete())).toEqual([]);
   });
   it("faltando peso fica fora", () => {
-    expect(preparedIssues(complete({ weight_kg: null }))).toEqual(["Falta: peso (kg)"]);
+    expect(preparedIssues(complete({ weight_kg: null }))).toEqual(["Falta: peso (kg) (não encontrado no Mercado Livre, Amazon nem fornecedores pelo mesmo EAN)"]);
   });
   it("EAN de outra variação fica fora", () => {
     const p = complete();

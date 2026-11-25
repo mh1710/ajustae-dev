@@ -1,18 +1,13 @@
 /** Consulta de categoria do catálogo do Mercado Livre; não altera cadastro no Bling. */
+import { mlFetch, mlHttpError } from "./ml-http.server";
+
 const API = "https://api.mercadolibre.com";
 
 async function read(token: string | null, path: string): Promise<Record<string, unknown> | null> {
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const response = await fetch(`${API}${path}`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
-    if (response.status === 404) return null;
-    if ((response.status === 429 || response.status >= 500) && attempt < 2) {
-      await new Promise((resolve) => setTimeout(resolve, 450 * 2 ** attempt));
-      continue;
-    }
-    if (!response.ok) throw new Error(`Mercado Livre indisponível (HTTP ${response.status})`);
-    return await response.json() as Record<string, unknown>;
-  }
-  return null;
+  const response = await mlFetch(`${API}${path}`, { token });
+  if (response.status === 404) return null;
+  if (!response.ok) throw await mlHttpError(response, "Mercado Livre recusou a consulta de categoria");
+  return await response.json() as Record<string, unknown>;
 }
 
 function tokens(s: string) {

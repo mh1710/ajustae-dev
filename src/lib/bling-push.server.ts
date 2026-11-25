@@ -182,7 +182,7 @@ export async function buildFullProductPayload(productId: string): Promise<Record
   const payload: Record<string, unknown> = {};
   const nome = toStr(p.nome); if (nome) payload.nome = nome;
   const codigo = toStr(p.codigo); if (codigo) payload.codigo = codigo;
-  if (p.source === "copia_empresa" || p.source === "garimpo_ml") {
+  if (p.source === "copia_empresa" || p.source === "garimpo_ml" || p.source === "catalogo_fornecedor") {
     const { data: supplier, error } = await supabaseAdmin.rpc("resolve_import_product_supplier" as never, {
       _company_id:p.company_id, _sku:p.codigo, _fallback_cost:p.preco_custo, _fallback_name:p.nome,
     } as never);
@@ -312,6 +312,9 @@ async function supplierDescricao(
 }
 
 async function createProductWithSupplier(integ: BlingIntegrationRow, item: PushItem, payload: Record<string, unknown>, reuseLocalId = true) {
+  if (!(Number(payload.preco) > 0)) {
+    return { ok: false, status: 0, errorCode: "sem_preco", errorMessage: `SKU ${String(payload.codigo ?? "?")}: sem preço de venda pelas regras da empresa; cadastro não enviado ao Bling.`, responseBodySafe: undefined, retries: 0 } as const;
+  }
   const supplier = payload.fornecedor as ReturnType<typeof importSupplierPayload> | undefined;
   const { data: local } = supplier && reuseLocalId
     ? await supabaseAdmin.from("bling_products").select("bling_product_id").eq("company_id",item.company_id).eq("id",item.product_id).maybeSingle()
@@ -394,6 +397,9 @@ export async function processItem(integ: BlingIntegrationRow, item: PushItem) {
     });
     return res;
   }
+  if ((item.tipo === "preco" || item.tipo === "preco_loja") && !(Number(item.valor_novo) > 0)) {
+    return { ok: false, status: 0, errorCode: "sem_preco", errorMessage: "Preço de venda zerado ou inválido; não enviado ao Bling.", responseBodySafe: undefined, retries: 0 } as const;
+  }
   if (item.tipo === "preco") {
     const res = await blingApiRequest(integ, "PATCH", `/produtos/${encodeURIComponent(item.bling_product_id)}`, {
       preco: Number(item.valor_novo),
@@ -408,6 +414,8 @@ export async function processItem(integ: BlingIntegrationRow, item: PushItem) {
     if (item.tipo === "criar") {
       return createProductWithSupplier(integ,item,payload);
     }
+    // Atualização completa nunca zera o preço de venda no Bling.
+    if (!(Number(payload.preco) > 0)) delete payload.preco;
     // Envia somente os campos que mudaram desde o último envio.
     const { data: prod } = await supabaseAdmin
       .from("bling_products")
@@ -994,7 +1002,7 @@ async function processPushBatchInner(integrationId: string | null, limit = 5): P
           failed++;
         }
       } else {
-        const retry = res.errorCode === "fornecedor_nao_confirmado" ? 10 : retryDelayFor(res.status, it.tentativas);
+        const retry = res.errorCode === "fornecedor_nao_confirmado" ? 10 : res.errorCode === "sem_preco" ? null : retryDelayFor(res.status, it.tentativas);
         await supabaseAdmin.rpc("finish_bling_push_error", {
           _item_id: it.id,
           _erro: res.errorMessage ?? `HTTP ${res.status}`,

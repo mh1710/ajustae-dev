@@ -41,7 +41,8 @@ export function preparedIssues(p: PreparedProspect): string[] {
   const note = p.row.raw?.prepared?.identity_note;
   if (note) issues.push(`EAN pode ser de outra variação: ${note}`);
   const missing = draftMissing(toDraft(p));
-  if (missing.length) issues.push(`Falta: ${missing.join(", ")}`);
+  if (missing.length) issues.push(`Falta: ${missing.join(", ")} (não encontrado no Mercado Livre, Amazon nem fornecedores pelo mesmo EAN)`);
   return [...issues, ...p.blockers];
 }
+
 

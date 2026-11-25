@@ -38,8 +38,8 @@ export const startProspect = createServerFn({ method: "POST" })
         keywords: z.array(z.string().trim().min(1)).default([]),
         target: z.number().int().min(1).max(1000).default(100),
         max_cost: z.number().positive().default(1000),
-        max_weight_kg: z.number().positive().default(30),
-        max_length_cm: z.number().positive().default(70),
+        max_weight_kg: z.number().positive().max(30).default(30),
+        max_length_cm: z.number().positive().max(70).default(70),
         require_measures: z.boolean().default(false),
         quick_collect: z.boolean().default(false),
         shipping_mode: z.enum(["full", "tomorrow", "deadline"]).default("full"),
@@ -187,17 +187,32 @@ export const importProspectItems = createServerFn({ method: "POST" })
     const item = staged[0];
     const { data: job } = await db.from("ml_prospect_jobs").select("params").eq("id", item.job_id).single();
     // Offer, price and delivery are rechecked live; measures gathered in preparation/review fill what ML omits.
-    const fresh = await evaluateCandidate(await getMlAccessToken(), item.catalog_product_id, { ...job.params, require_measures: false });
+    const { MlProspectAccessError } = await import("@/lib/ml-prospect.server");
+    const { isOffersListPath } = await import("@/lib/ml-prospect-block");
+    const mlToken = await getMlAccessToken();
+    const fresh = await evaluateCandidate(mlToken, item.catalog_product_id, { ...job.params, require_measures: false }).catch(async (e) => {
+      if (e instanceof MlProspectAccessError && isOffersListPath(e.path)) {
+        const { diagnoseMl403 } = await import("@/lib/ml-403.server");
+        const { ml403Summary } = await import("@/lib/ml-403");
+        const why = e.detail ? await diagnoseMl403(mlToken, e.detail).catch(() => null) : null;
+        throw new Error(`O Mercado Livre está bloqueando a consulta de ofertas (403).${why ? ` Motivo: ${ml403Summary(why)}` : ""} O produto continua na lista. Tente importar mais tarde.`);
+      }
+      throw e;
+    });
     if (!fresh.ok) throw new Error(`Oferta não aprovada: ${fresh.reason}`);
     // Keep fiscal review only for the same exact product identity.
     if (item.ean && fresh.row.ean && item.ean !== fresh.row.ean) throw new Error("EAN mudou; revise o produto novamente.");
-    const { keepPreparedMeasures, measureLimitIssue } = await import("@/lib/ml-prospect-prepare");
+    const { keepPreparedMeasures, measureLimitIssue, prospectLimits } = await import("@/lib/ml-prospect-prepare");
     const kept = keepPreparedMeasures(fresh.row, item);
-    const limitIssue = measureLimitIssue(kept.measures, Number(job.params?.max_weight_kg ?? 30), Number(job.params?.max_length_cm ?? 70));
+    if (!kept.complete) throw new Error("Peso e medidas incompletos; o produto não pode ir ao Bling.");
+    const limits = prospectLimits(job.params);
+    const limitIssue = measureLimitIssue(kept.measures, limits.maxWeightKg, limits.maxLengthCm);
     if (limitIssue) throw new Error(limitIssue);
     const refreshedRaw = { ...fresh.row.raw, review: item.raw?.review, prepared: item.raw?.prepared, measurement_sources: { ...(item.raw?.measurement_sources ?? {}), ...((fresh.row.raw as any)?.measurement_sources ?? {}) } };
     const { completeProspectPictures } = await import("@/lib/ml-prospect-fiscal.server");
-    const photos = await completeProspectPictures(fresh.row.ean, fresh.row.pictures);
+    // Photos gathered in preparation (supplier/Amazon by exact EAN) stay after the live ML photos.
+    const { mergeProspectPictures } = await import("@/lib/ml-prospect-photos");
+    const photos = await completeProspectPictures(fresh.row.ean, mergeProspectPictures(fresh.row.pictures, Array.isArray(item.pictures) ? item.pictures : []));
     const pictures = photos.pictures.slice(0, 18);
     const { error: refreshError } = await db.from("ml_prospect_items").update({ ...fresh.row, ...kept.measures, marca: fresh.row.marca || item.marca, pictures, pictures_count: pictures.length, thumbnail: fresh.row.thumbnail ?? pictures[0] ?? null, raw: refreshedRaw }).eq("id", item.id);
     if (refreshError) throw new Error(refreshError.message);
@@ -342,7 +357,7 @@ export const reviewProspectItem = createServerFn({ method: "POST" })
     return await reviewProspect(data.company_id, { ...item, ...update }, false);
   });
 
-/** Busca todos os dados que a auditoria exige (fontes por EAN e pesquisa na internet) e devolve as pendências. */
+/** Busca todos os dados que a auditoria exige (fornecedores, Bling, catálogo do Mercado Livre e Amazon pelo mesmo EAN; sem IA) e devolve as pendências. */
 export const prepareProspectItem = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((data: unknown) => z.object({ company_id: z.string().uuid(), item_id: z.string().uuid() }).parse(data))

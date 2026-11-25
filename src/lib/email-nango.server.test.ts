@@ -4,6 +4,7 @@ import {
   createNangoConnectSession,
   listNangoMessageIds,
   normalizeGmailMessage,
+  selectNangoCredentialSlot,
 } from "./email-nango.server";
 
 function jsonResponse(body: unknown, status = 200) {
@@ -15,11 +16,23 @@ function jsonResponse(body: unknown, status = 200) {
 
 afterEach(() => {
   delete process.env.NANGO_API_KEY;
+  delete process.env.NANGO_API_KEY_SECONDARY;
+  delete process.env.NANGO_CONNECTIONS_PER_KEY;
   delete process.env.NANGO_GMAIL_INTEGRATION_ID;
+  delete process.env.NANGO_SECONDARY_GMAIL_INTEGRATION_ID;
   vi.restoreAllMocks();
 });
 
 describe("conector Nango", () => {
+  it("preenche a credencial primária e direciona novas conexões para a secundária", () => {
+    process.env.NANGO_API_KEY = "unit-test-primary";
+    process.env.NANGO_API_KEY_SECONDARY = "unit-test-secondary";
+    process.env.NANGO_CONNECTIONS_PER_KEY = "2";
+    expect(selectNangoCredentialSlot({ 1: 1, 2: 0 })).toBe(1);
+    expect(selectNangoCredentialSlot({ 1: 2, 2: 0 })).toBe(2);
+    expect(() => selectNangoCredentialSlot({ 1: 2, 2: 2 })).toThrow("atingiram o limite");
+  });
+
   it("normaliza assunto, remetente, UTF-8 e data de uma mensagem Gmail", () => {
     const encoded = Buffer.from("O seu token de acesso é ÁB12Ç", "utf8").toString("base64url");
     const message = normalizeGmailMessage({
@@ -65,6 +78,30 @@ describe("conector Nango", () => {
     });
     expect(result.token).toBe("session-ficticia");
     expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("usa a segunda chave e a integração secundária na sessão do slot 2", async () => {
+    process.env.NANGO_API_KEY = "unit-test-primary";
+    process.env.NANGO_API_KEY_SECONDARY = "unit-test-secondary";
+    process.env.NANGO_SECONDARY_GMAIL_INTEGRATION_ID = "google-mail-secondary";
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer unit-test-secondary");
+      const body = JSON.parse(String(init?.body));
+      expect(body.allowed_integrations).toEqual(["google-mail-secondary"]);
+      return jsonResponse({ data: { token: "session-secondary" } });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(
+      createNangoConnectSession({
+        userId: "user-secondary",
+        connector: "google",
+        credentialSlot: 2,
+      }),
+    ).resolves.toMatchObject({
+      token: "session-secondary",
+      integration_id: "google-mail-secondary",
+      credential_slot: 2,
+    });
   });
 
   it("recusa finalizar uma conexão pertencente a outro usuário", async () => {

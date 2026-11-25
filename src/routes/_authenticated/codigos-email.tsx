@@ -97,6 +97,7 @@ function EmailCodesPage() {
 
   async function connect(connector?: "google" | "microsoft") {
     let connectUi: ReturnType<Nango["openConnectUI"]> | null = null;
+    let nangoCredentialSlot: 1 | 2 = 1;
     try {
       setBusy(`connect-${connector ?? "all"}`);
       if (config.data?.provider === "nango") {
@@ -111,6 +112,7 @@ function EmailCodesPage() {
                   data: {
                     connection_id: event.payload.connectionId,
                     integration_id: event.payload.providerConfigKey,
+                    credential_slot: nangoCredentialSlot,
                   },
                 });
                 toast.success("E-mail conectado pelo Nango com permissão somente de leitura.");
@@ -134,6 +136,7 @@ function EmailCodesPage() {
       }
       const result = await beginConnection({ data: { connector } });
       if (result.provider === "nango") {
+        nangoCredentialSlot = result.credential_slot;
         connectUi?.setSessionToken(result.session_token);
       } else {
         window.location.assign(result.url);

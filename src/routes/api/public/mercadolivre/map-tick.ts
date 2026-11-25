@@ -1,7 +1,8 @@
 import { createFileRoute } from "@tanstack/react-router";
 
 const BATCH = 240;
-const CONCURRENCY = 48; // ~limite do ML: 1.500 req/min por app
+// Cota oficial do ML: 18.000 req/h por aplicação (4/s com folga, controlados em ml-http.server).
+const CONCURRENCY = 4;
 const TIME_BUDGET_MS = 24_000;
 const WORKERS = 4; // ciclos rodando em paralelo no mesmo job
 
@@ -205,7 +206,9 @@ export const Route = createFileRoute("/api/public/mercadolivre/map-tick")({
 
             // Só entram na lista os produtos com oferta Full entregando no CEP e com estoque.
             const keep = rows.filter((r) => r.qualifies);
-            const drop = rows.filter((r) => !r.qualifies).map((r) => r.product_id);
+            // Erro na consulta (ex.: 403 do ML) não prova que o produto saiu do ML:
+            // mantém o vínculo existente e não marca o SKU como checado.
+            const drop = rows.filter((r) => !r.qualifies && !r.error).map((r) => r.product_id);
 
             if (keep.length > 0) {
               const { error: upsertError } = await supabaseAdmin
@@ -223,7 +226,7 @@ export const Route = createFileRoute("/api/public/mercadolivre/map-tick")({
             // Marca os SKUs como já checados nesta varredura da conta.
             await skuChecks().upsert(
               rows
-                .filter((r) => !!(r.sku ?? "").trim())
+                .filter((r) => !!(r.sku ?? "").trim() && !r.error)
                 .map((r) => ({
                   sku: (r.sku ?? "").trim(),
                   job_id: job.id,
@@ -232,6 +235,16 @@ export const Route = createFileRoute("/api/public/mercadolivre/map-tick")({
                 })),
               { onConflict: "sku" },
             );
+
+            // Mostra o motivo das consultas recusadas (ex.: 403 do ML) sem interromper o mapeamento.
+            const failed = rows.filter((r) => r.error);
+            await supabaseAdmin
+              .from("ml_map_jobs")
+              .update({
+                error: failed.length > 0 ? `${failed.length} produto(s) não consultados neste lote; tentam de novo depois. ${failed[0]?.error ?? ""}`.trim() : null,
+                updated_at: new Date().toISOString(),
+              })
+              .eq("id", job.id);
 
             processed += chunk.length;
             await (supabaseAdmin.rpc as unknown as (

@@ -1,6 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
+import { assertPasswordPolicy, passwordExpired } from "./password-policy";
 
 async function assertAdmin(context: { supabase: any; userId: string }) {
   const { data, error } = await context.supabase.rpc("has_role", {
@@ -24,6 +25,9 @@ export type AdminUser = {
   active: boolean;
   access_expires_at: string | null;
   companies: number;
+  mfa_email: string | null;
+  password_changed_at: string | null;
+  password_expired: boolean;
 };
 
 export const adminListUsers = createServerFn({ method: "GET" })
@@ -32,7 +36,7 @@ export const adminListUsers = createServerFn({ method: "GET" })
     await assertAdmin(context);
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
 
-    const [{ data: authList }, { data: profiles }, { data: perms }, { data: roles }, { data: links }] =
+    const [{ data: authList }, { data: profiles }, { data: perms }, { data: roles }, { data: links }, { data: security }] =
       await Promise.all([
         supabaseAdmin.auth.admin.listUsers({ page: 1, perPage: 1000 }),
         supabaseAdmin.from("profiles").select("id, nome, email, telefone, created_at"),
@@ -41,7 +45,9 @@ export const adminListUsers = createServerFn({ method: "GET" })
           .select("user_id, can_download_sheets, can_push_bling, can_use_ai, active, access_expires_at"),
         supabaseAdmin.from("user_roles").select("user_id, role"),
         supabaseAdmin.from("company_users").select("user_id").eq("ativo", true),
+        (supabaseAdmin as any).from("account_security").select("user_id, mfa_email, password_changed_at"),
       ]);
+    const securityMap = new Map(((security ?? []) as Array<{ user_id: string; mfa_email: string | null; password_changed_at: string | null }>).map((r) => [r.user_id, r]));
 
     const profileMap = new Map((profiles ?? []).map((p: any) => [p.id, p]));
     const permMap = new Map((perms ?? []).map((p: any) => [p.user_id, p]));
@@ -79,6 +85,9 @@ export const adminListUsers = createServerFn({ method: "GET" })
           active: perm?.active ?? true,
           access_expires_at: perm?.access_expires_at ?? null,
           companies: companyCount.get(p.id) ?? 0,
+          mfa_email: securityMap.get(p.id)?.mfa_email ?? null,
+          password_changed_at: securityMap.get(p.id)?.password_changed_at ?? null,
+          password_expired: passwordExpired(securityMap.get(p.id)?.password_changed_at ?? null),
         };
       })
       .sort((a, b) => (a.email ?? "").localeCompare(b.email ?? ""));
@@ -90,7 +99,7 @@ export const adminCreateUser = createServerFn({ method: "POST" })
     z
       .object({
         email: z.string().trim().email(),
-        password: z.string().min(8).max(72),
+        password: z.string().max(72),
         nome: z.string().trim().max(120).optional(),
         is_admin: z.boolean().default(false),
       })
@@ -98,6 +107,7 @@ export const adminCreateUser = createServerFn({ method: "POST" })
   )
   .handler(async ({ data, context }) => {
     await assertAdmin(context);
+    assertPasswordPolicy(data.password);
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
 
     const { data: grant, error: grantError } = await supabaseAdmin.rpc("authorize_account_creation" as any, { _email: data.email } as any);
@@ -110,6 +120,12 @@ export const adminCreateUser = createServerFn({ method: "POST" })
       app_metadata: { provisioned_by_admin: true },
     });
     if (error || !created.user) throw new Error(error?.message ?? "Falha ao criar usuário");
+
+    // Senha validada aqui pela política: vale por 365 dias.
+    await (supabaseAdmin as any).from("account_security").upsert(
+      { user_id: created.user.id, password_changed_at: new Date().toISOString(), updated_at: new Date().toISOString() },
+      { onConflict: "user_id" },
+    );
 
     // Novos usuários já nascem com todas as permissões desativadas (trigger),
     // mas garantimos a linha caso o gatilho não tenha rodado.
@@ -181,14 +197,28 @@ export const adminSetRole = createServerFn({ method: "POST" })
 export const adminResetPassword = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d: unknown) =>
-    z.object({ user_id: z.string().uuid(), password: z.string().min(8).max(72) }).parse(d),
+    z.object({ user_id: z.string().uuid(), password: z.string().max(72) }).parse(d),
+  )
+  .handler(async ({ data, context }) => {
+    await assertAdmin(context);
+    assertPasswordPolicy(data.password);
+    const { setPasswordWithGrant } = await import("./account-security.server");
+    await setPasswordWithGrant(data.user_id, data.password);
+    return { ok: true };
+  });
+
+export const adminSetMfaEmail = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d: unknown) =>
+    z.object({ user_id: z.string().uuid(), mfa_email: z.string().trim().email().max(254).nullable() }).parse(d),
   )
   .handler(async ({ data, context }) => {
     await assertAdmin(context);
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-    const { error } = await supabaseAdmin.auth.admin.updateUserById(data.user_id, {
-      password: data.password,
-    });
+    const { error } = await (supabaseAdmin as any).from("account_security").upsert(
+      { user_id: data.user_id, mfa_email: data.mfa_email ? data.mfa_email.toLowerCase() : null, updated_at: new Date().toISOString() },
+      { onConflict: "user_id" },
+    );
     if (error) throw new Error(error.message);
     return { ok: true };
   });

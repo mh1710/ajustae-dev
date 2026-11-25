@@ -194,17 +194,18 @@ function similarity(a: string, b: string) {
 }
 
 async function mlModel(token: string, ean: string | null, titulo: string | null): Promise<string | null> {
+  const { mlFetch } = await import("./ml-http.server");
   const pick = async (x: any) => {
     let m = (x?.attributes ?? []).find((a: any) => a?.id === "MODEL")?.value_name;
     if (!m && x?.id) {
-      const d = await fetch(`https://api.mercadolibre.com/products/${x.id}`, { headers: { Authorization: `Bearer ${token}` } });
+      const d = await mlFetch(`https://api.mercadolibre.com/products/${x.id}`, { token });
       if (d.ok) m = ((await d.json()) as any)?.attributes?.find((a: any) => a?.id === "MODEL")?.value_name;
     }
     return m ? String(m).trim().slice(0, 100) : null;
   };
   const g = (ean ?? "").replace(/\D/g, "");
   if (g.length >= 8) {
-    const r = await fetch(`https://api.mercadolibre.com/products/search?site_id=MLB&status=active&product_identifier=${g}`, { headers: { Authorization: `Bearer ${token}` } });
+    const r = await mlFetch(`https://api.mercadolibre.com/products/search?site_id=MLB&status=active&product_identifier=${g}`, { token });
     if (r.ok) {
       const matches = (((await r.json()) as any)?.results ?? []) as any[];
       for (const x of matches.slice(0, 10)) {
@@ -217,7 +218,7 @@ async function mlModel(token: string, ean: string | null, titulo: string | null)
     }
   }
   if (titulo) {
-    const r = await fetch(`https://api.mercadolibre.com/products/search?site_id=MLB&status=active&q=${encodeURIComponent(titulo.slice(0, 120))}`, { headers: { Authorization: `Bearer ${token}` } });
+    const r = await mlFetch(`https://api.mercadolibre.com/products/search?site_id=MLB&status=active&q=${encodeURIComponent(titulo.slice(0, 120))}`, { token });
     if (r.ok) {
       const res = (((await r.json()) as any)?.results ?? []).slice(0, 10) as any[];
       const best = res.map((x) => ({ x, s: similarity(titulo, String(x.name ?? "")) })).sort((a, b) => b.s - a.s)[0];

@@ -250,6 +250,7 @@ export function MercadoLivreTab({ companyId }: { companyId?: string }) {
           </div>
 
           {running && <Progress value={progress} />}
+          {job.data?.error && <p className="break-words text-xs text-muted-foreground">{job.data.error}</p>}
 
           <div className="rounded-lg border p-3 space-y-2">
             <p className="text-sm font-medium">Mapear um produto específico</p>

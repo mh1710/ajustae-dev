@@ -86,7 +86,12 @@ type ImportSummary = {
   existing?: number;
   filtered?: number;
   invalid?: number;
-  applied?: { imported?: number; updated?: number; product_ids: string[]; updated_product_ids?: string[] };
+  applied?: {
+    imported?: number;
+    updated?: number;
+    product_ids: string[];
+    updated_product_ids?: string[];
+  };
   queued?: number;
 };
 
@@ -104,15 +109,22 @@ type AnalyzedRow = {
 };
 
 const PREVIEW_FIELDS = [
-  ["nome", "Nome"], ["gtin", "EAN"], ["gtin_embalagem", "EAN embalagem"],
-  ["preco_custo", "Preço de custo"], ["peso_liquido", "Peso"], ["largura", "Largura"],
-  ["altura", "Altura"], ["profundidade", "Profundidade"], ["url_imagens_externas", "Imagens"],
+  ["nome", "Nome"],
+  ["gtin", "EAN"],
+  ["gtin_embalagem", "EAN embalagem"],
+  ["preco_custo", "Preço de custo"],
+  ["peso_liquido", "Peso"],
+  ["largura", "Largura"],
+  ["altura", "Altura"],
+  ["profundidade", "Profundidade"],
+  ["url_imagens_externas", "Imagens"],
 ] as const;
 
 function missingPreviewFields(parsed: Record<string, unknown> | null) {
   if (!parsed) return "Dados não disponíveis";
   return PREVIEW_FIELDS.filter(([key]) => parsed[key] == null || String(parsed[key]).trim() === "")
-    .map(([, label]) => label).join(", ");
+    .map(([, label]) => label)
+    .join(", ");
 }
 
 function previewValue(value: unknown) {
@@ -221,8 +233,7 @@ export function SupplierSheetImport({
   });
   const supplierPrefixes = useQuery({
     queryKey: ["supplier-import-prefixes", companyId, supplier.id],
-    queryFn: () =>
-      fetchPrefixes({ data: { company_id: companyId, fornecedor_id: supplier.id } }),
+    queryFn: () => fetchPrefixes({ data: { company_id: companyId, fornecedor_id: supplier.id } }),
     enabled: !!companyId && !!supplier.id,
   });
 
@@ -279,7 +290,15 @@ export function SupplierSheetImport({
   const analyzedRows = useQuery({
     queryKey: ["supplier-import-rows", batchId],
     queryFn: () =>
-      fetchRows({ data: { batch_id: batchId!, company_id: companyId, page: 1, page_size: 30, only_import: true } }),
+      fetchRows({
+        data: {
+          batch_id: batchId!,
+          company_id: companyId,
+          page: 1,
+          page_size: 30,
+          only_import: true,
+        },
+      }),
     enabled: !!batchId && step !== "mapping",
   });
 
@@ -302,7 +321,9 @@ export function SupplierSheetImport({
           break;
         }
         if (["erro", "cancelado"].includes(String(current.status))) {
-          throw new Error(String(current.last_error ?? "A propagação de imagens não foi concluída."));
+          throw new Error(
+            String(current.last_error ?? "A propagação de imagens não foi concluída."),
+          );
         }
         if (attempt === MAX_JOB_POLLS - 1) {
           throw new Error(
@@ -412,7 +433,12 @@ export function SupplierSheetImport({
     setBusy(true);
     setProgress(0);
     try {
-      console.info("[supplier-import-ui] analyze-start", { companyId, supplierId: supplier.id, rows: mappedRows.length, file: selectedFile.name });
+      console.info("[supplier-import-ui] analyze-start", {
+        companyId,
+        supplierId: supplier.id,
+        rows: mappedRows.length,
+        file: selectedFile.name,
+      });
       let savedProfileId = profileId;
       if (saveAsProfile) {
         console.info("[supplier-import-ui] save-profile-start");
@@ -437,7 +463,10 @@ export function SupplierSheetImport({
             queryKey: ["supplier-import-profiles", companyId, supplier.id],
           });
         } catch (error) {
-          console.warn("[supplier-import-ui] save-profile-error; continuing without profile", error);
+          console.warn(
+            "[supplier-import-ui] save-profile-error; continuing without profile",
+            error,
+          );
           savedProfileId = null;
           toast.info("Perfil não salvo. A análise continuará usando o mapeamento atual.");
         }
@@ -460,7 +489,11 @@ export function SupplierSheetImport({
       setBatchId(batch.id);
       let totals = { inserted: 0, valid: 0, existing: 0, filtered: 0, invalid: 0 };
       for (let index = 0; index < mappedRows.length; index += CHUNK_SIZE) {
-        console.info("[supplier-import-ui] ingest-start", { batchId: batch.id, chunk: Math.floor(index / CHUNK_SIZE) + 1, rows: Math.min(CHUNK_SIZE, mappedRows.length - index) });
+        console.info("[supplier-import-ui] ingest-start", {
+          batchId: batch.id,
+          chunk: Math.floor(index / CHUNK_SIZE) + 1,
+          rows: Math.min(CHUNK_SIZE, mappedRows.length - index),
+        });
         const result = await ingestRows({
           data: {
             batch_id: batch.id,
@@ -471,7 +504,10 @@ export function SupplierSheetImport({
             rows: mappedRows.slice(index, index + CHUNK_SIZE),
           },
         });
-        console.info("[supplier-import-ui] ingest-complete", { chunk: Math.floor(index / CHUNK_SIZE) + 1, result });
+        console.info("[supplier-import-ui] ingest-complete", {
+          chunk: Math.floor(index / CHUNK_SIZE) + 1,
+          result,
+        });
         totals = {
           inserted: totals.inserted + result.inserted,
           valid: totals.valid + result.valid,
@@ -507,13 +543,27 @@ export function SupplierSheetImport({
     if (!batchId) return;
     setBusy(true);
     try {
-      const applied = await applyImport({ data: { batch_id: batchId, company_id: companyId, mode } });
+      const applied = await applyImport({
+        data: { batch_id: batchId, company_id: companyId, mode },
+      });
       const allProductIds = [...applied.product_ids, ...(applied.updated_product_ids ?? [])];
       const newProductIds = applied.product_ids;
+      const existingProductIds = applied.updated_product_ids ?? [];
       if (allProductIds.length > 0) {
         await waitForImagePropagation(allProductIds);
       }
       let queued = 0;
+      if (existingProductIds.length > 0 && (mode === "existing_images" || sendToBling)) {
+        const result = await enqueue({
+          data: {
+            company_id: companyId,
+            product_ids: existingProductIds,
+            scope: "produto",
+            only_changed: false,
+          },
+        });
+        queued += result.async ? existingProductIds.length : (result.created_produto ?? 0);
+      }
       if (sendToBling && mode === "all" && newProductIds.length > 0) {
         const result = await enqueue({
           data: {
@@ -523,17 +573,16 @@ export function SupplierSheetImport({
             only_changed: false,
           },
         });
-        queued = result.async ? newProductIds.length : (result.created_criar ?? 0);
+        queued += result.async ? newProductIds.length : (result.created_criar ?? 0);
       }
       setSummary((current) => ({ ...(current ?? {}), mode, applied, queued }));
       setStep("done");
       toast.success(
         mode === "existing_images"
-          ? `${applied.updated ?? 0} produtos existentes foram atualizados com imagens.`
-          :
-        sendToBling
-          ? `${applied.imported ?? applied.product_ids.length} produtos preparados e ${queued} enviados para a fila do Bling.`
-          : `${applied.imported ?? applied.product_ids.length} produtos preparados.`,
+          ? `${applied.updated ?? 0} produtos existentes foram atualizados com imagens; ${queued} entraram na fila do Bling.`
+          : sendToBling
+            ? `${applied.imported ?? applied.product_ids.length} produtos preparados e ${queued} enviados para a fila do Bling.`
+            : `${applied.imported ?? applied.product_ids.length} produtos preparados.`,
       );
       await Promise.all([
         qc.invalidateQueries({ queryKey: ["supplier-gap"] }),
@@ -586,11 +635,15 @@ export function SupplierSheetImport({
               <Select
                 value={skuPrefix}
                 onValueChange={setSkuPrefix}
-                disabled={supplierPrefixes.isLoading || !(supplierPrefixes.data?.prefixes.length ?? 0)}
+                disabled={
+                  supplierPrefixes.isLoading || !(supplierPrefixes.data?.prefixes.length ?? 0)
+                }
               >
                 <SelectTrigger>
                   <SelectValue
-                    placeholder={supplierPrefixes.isLoading ? "Carregando..." : "Selecione o prefixo"}
+                    placeholder={
+                      supplierPrefixes.isLoading ? "Carregando..." : "Selecione o prefixo"
+                    }
                   />
                 </SelectTrigger>
                 <SelectContent>
@@ -827,7 +880,9 @@ export function SupplierSheetImport({
                           ),
                         ),
                       ).map((key) => (
-                        <th key={key} className="px-3 py-2 whitespace-nowrap">{key}</th>
+                        <th key={key} className="px-3 py-2 whitespace-nowrap">
+                          {key}
+                        </th>
                       ))}
                       <th className="px-3 py-2">Imagens R2</th>
                       <th className="px-3 py-2">Dados faltantes</th>
@@ -846,16 +901,27 @@ export function SupplierSheetImport({
                           ),
                         ).map((key) => (
                           <td key={key} className="max-w-[280px] px-3 py-2 align-top text-xs">
-                            <div className="max-h-20 overflow-auto whitespace-pre-wrap">{previewValue(row.parsed?.[key])}</div>
+                            <div className="max-h-20 overflow-auto whitespace-pre-wrap">
+                              {previewValue(row.parsed?.[key])}
+                            </div>
                           </td>
                         ))}
                         <td className="px-3 py-2 align-top text-xs">
-                          <Badge variant={row.parsed?.r2_image_status === "encontradas" ? "secondary" : "outline"}>
+                          <Badge
+                            variant={
+                              row.parsed?.r2_image_status === "encontradas"
+                                ? "secondary"
+                                : "outline"
+                            }
+                          >
                             {String(row.parsed?.r2_image_status ?? "não verificado")}
                           </Badge>
-                          {Array.isArray(row.parsed?.r2_image_keys) && row.parsed.r2_image_keys.length > 0 && (
-                            <div className="mt-1 max-w-[220px] break-all text-muted-foreground">{row.parsed.r2_image_keys.join(" | ")}</div>
-                          )}
+                          {Array.isArray(row.parsed?.r2_image_keys) &&
+                            row.parsed.r2_image_keys.length > 0 && (
+                              <div className="mt-1 max-w-[220px] break-all text-muted-foreground">
+                                {row.parsed.r2_image_keys.join(" | ")}
+                              </div>
+                            )}
                         </td>
                         <td className="px-3 py-2 align-top text-xs text-amber-700">
                           {missingPreviewFields(row.parsed) || "nenhum"}
@@ -867,7 +933,8 @@ export function SupplierSheetImport({
               </div>
               {(analyzedRows.data?.count ?? 0) > 30 && (
                 <p className="text-xs text-muted-foreground">
-                  Exibindo os primeiros 30 produtos de {analyzedRows.data?.count} que entrarão no banco.
+                  Exibindo os primeiros 30 produtos de {analyzedRows.data?.count} que entrarão no
+                  banco.
                 </p>
               )}
               <label className="flex items-center gap-2 rounded-md border p-3 text-sm">

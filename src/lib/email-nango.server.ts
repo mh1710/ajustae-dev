@@ -5,6 +5,7 @@ const GMAIL_READONLY_SCOPE = "https://www.googleapis.com/auth/gmail.readonly";
 const OUTLOOK_READONLY_SCOPES = "openid email offline_access User.Read Mail.Read";
 
 export type EmailConnector = "google" | "microsoft";
+export type NangoCredentialSlot = 1 | 2;
 
 export type ProviderEmailMessage = {
   id: string;
@@ -36,11 +37,59 @@ function requiredEnv(name: string): string {
   return value;
 }
 
+function nangoApiKey(slot: NangoCredentialSlot): string {
+  return requiredEnv(slot === 2 ? "NANGO_API_KEY_SECONDARY" : "NANGO_API_KEY");
+}
+
+export function getConfiguredNangoCredentialSlots(): NangoCredentialSlot[] {
+  const slots: NangoCredentialSlot[] = [];
+  if (env("NANGO_API_KEY")) slots.push(1);
+  if (env("NANGO_API_KEY_SECONDARY")) slots.push(2);
+  return slots;
+}
+
+export function getNangoConnectionsPerCredential(): number {
+  const parsed = Number.parseInt(env("NANGO_CONNECTIONS_PER_KEY") || "10", 10);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.min(parsed, 10_000) : 10;
+}
+
+export function selectNangoCredentialSlot(
+  activeConnections: Partial<Record<NangoCredentialSlot, number>>,
+): NangoCredentialSlot {
+  const limit = getNangoConnectionsPerCredential();
+  for (const slot of getConfiguredNangoCredentialSlots()) {
+    if ((activeConnections[slot] ?? 0) < limit) return slot;
+  }
+  if (getConfiguredNangoCredentialSlots().length === 0) {
+    throw new Error("Configure NANGO_API_KEY no servidor.");
+  }
+  throw new Error(
+    `As credenciais Nango configuradas atingiram o limite de ${limit} conexão(ões) cada.`,
+  );
+}
+
 function apiBase(): string {
   return (env("NANGO_API_URL") || NANGO_DEFAULT_API).replace(/\/$/, "");
 }
 
-export function getNangoIntegrationId(connector: EmailConnector): string {
+export function getNangoIntegrationId(
+  connector: EmailConnector,
+  credentialSlot: NangoCredentialSlot = 1,
+): string {
+  if (credentialSlot === 2) {
+    if (connector === "microsoft") {
+      return (
+        env("NANGO_SECONDARY_OUTLOOK_INTEGRATION_ID") ||
+        env("NANGO_OUTLOOK_INTEGRATION_ID") ||
+        "outlook"
+      );
+    }
+    return (
+      env("NANGO_SECONDARY_GMAIL_INTEGRATION_ID") ||
+      env("NANGO_GMAIL_INTEGRATION_ID") ||
+      "google-mail"
+    );
+  }
   if (connector === "microsoft") return env("NANGO_OUTLOOK_INTEGRATION_ID") || "outlook";
   return env("NANGO_GMAIL_INTEGRATION_ID") || "google-mail";
 }
@@ -49,9 +98,12 @@ export function getNangoReadonlyScopes(connector: EmailConnector): string {
   return connector === "microsoft" ? OUTLOOK_READONLY_SCOPES : GMAIL_READONLY_SCOPE;
 }
 
-export function connectorForNangoIntegration(integrationId: string): EmailConnector | null {
-  if (integrationId === getNangoIntegrationId("google")) return "google";
-  if (integrationId === getNangoIntegrationId("microsoft")) return "microsoft";
+export function connectorForNangoIntegration(
+  integrationId: string,
+  credentialSlot: NangoCredentialSlot = 1,
+): EmailConnector | null {
+  if (integrationId === getNangoIntegrationId("google", credentialSlot)) return "google";
+  if (integrationId === getNangoIntegrationId("microsoft", credentialSlot)) return "microsoft";
   return null;
 }
 
@@ -75,11 +127,15 @@ function errorMessage(payload: any, fallback: string): string {
   );
 }
 
-async function nangoRequest<T>(path: string, init?: RequestInit): Promise<T> {
+async function nangoRequest<T>(
+  path: string,
+  init?: RequestInit,
+  credentialSlot: NangoCredentialSlot = 1,
+): Promise<T> {
   const response = await fetch(`${apiBase()}${path}`, {
     ...init,
     headers: {
-      Authorization: `Bearer ${requiredEnv("NANGO_API_KEY")}`,
+      Authorization: `Bearer ${nangoApiKey(credentialSlot)}`,
       Accept: "application/json",
       ...(init?.body ? { "Content-Type": "application/json" } : {}),
       ...init?.headers,
@@ -100,32 +156,38 @@ export async function createNangoConnectSession(args: {
   userEmail?: string | null;
   displayName?: string | null;
   connector: EmailConnector;
+  credentialSlot?: NangoCredentialSlot;
 }) {
-  const integrationId = getNangoIntegrationId(args.connector);
+  const credentialSlot = args.credentialSlot ?? 1;
+  const integrationId = getNangoIntegrationId(args.connector, credentialSlot);
   const payload = await nangoRequest<{
     data?: { token?: string; connect_link?: string; expires_at?: string };
-  }>("/connect/sessions", {
-    method: "POST",
-    body: JSON.stringify({
-      end_user: {
-        id: args.userId,
-        ...(args.userEmail ? { email: args.userEmail } : {}),
-        ...(args.displayName ? { display_name: args.displayName } : {}),
-      },
-      tags: {
-        ajustae_user_id: args.userId,
-        ...(args.userEmail ? { end_user_email: args.userEmail } : {}),
-      },
-      allowed_integrations: [integrationId],
-      integrations_config_defaults: {
-        [integrationId]: {
-          connection_config: {
-            oauth_scopes_override: getNangoReadonlyScopes(args.connector),
+  }>(
+    "/connect/sessions",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        end_user: {
+          id: args.userId,
+          ...(args.userEmail ? { email: args.userEmail } : {}),
+          ...(args.displayName ? { display_name: args.displayName } : {}),
+        },
+        tags: {
+          ajustae_user_id: args.userId,
+          ...(args.userEmail ? { end_user_email: args.userEmail } : {}),
+        },
+        allowed_integrations: [integrationId],
+        integrations_config_defaults: {
+          [integrationId]: {
+            connection_config: {
+              oauth_scopes_override: getNangoReadonlyScopes(args.connector),
+            },
           },
         },
-      },
-    }),
-  });
+      }),
+    },
+    credentialSlot,
+  );
   const token = payload.data?.token;
   if (!token) throw new Error("O Nango não devolveu o token da sessão de conexão.");
   return {
@@ -133,6 +195,7 @@ export async function createNangoConnectSession(args: {
     connect_link: payload.data?.connect_link ?? null,
     expires_at: payload.data?.expires_at ?? null,
     integration_id: integrationId,
+    credential_slot: credentialSlot,
   };
 }
 
@@ -157,7 +220,9 @@ export async function assertNangoConnectionOwnership(args: {
   connectionId: string;
   integrationId: string;
   userId: string;
+  credentialSlot?: NangoCredentialSlot;
 }) {
+  const credentialSlot = args.credentialSlot ?? 1;
   const params = new URLSearchParams({
     endUserId: args.userId,
     integrationId: args.integrationId,
@@ -165,10 +230,10 @@ export async function assertNangoConnectionOwnership(args: {
   });
   let payload: any;
   try {
-    payload = await nangoRequest<any>(`/connections?${params}`);
+    payload = await nangoRequest<any>(`/connections?${params}`, undefined, credentialSlot);
   } catch (error) {
     if (!(error instanceof NangoHttpError) || error.status !== 404) throw error;
-    payload = await nangoRequest<any>(`/connection?${params}`);
+    payload = await nangoRequest<any>(`/connection?${params}`, undefined, credentialSlot);
   }
   const connection = connectionArray(payload).find((item) => {
     const id = String(item.connection_id ?? item.id ?? "");
@@ -187,15 +252,20 @@ async function nangoProxy<T>(args: {
   integrationId: string;
   path: string;
   init?: RequestInit;
+  credentialSlot?: NangoCredentialSlot;
 }): Promise<T> {
-  return nangoRequest<T>(`/proxy${args.path}`, {
-    ...args.init,
-    headers: {
-      "connection-id": args.connectionId,
-      "provider-config-key": args.integrationId,
-      ...args.init?.headers,
+  return nangoRequest<T>(
+    `/proxy${args.path}`,
+    {
+      ...args.init,
+      headers: {
+        "connection-id": args.connectionId,
+        "provider-config-key": args.integrationId,
+        ...args.init?.headers,
+      },
     },
-  });
+    args.credentialSlot ?? 1,
+  );
 }
 
 function decodeBase64UrlUtf8(value?: string | null): string {
@@ -253,6 +323,7 @@ export async function getNangoMailboxEmail(args: {
   connectionId: string;
   integrationId: string;
   connector: EmailConnector;
+  credentialSlot?: NangoCredentialSlot;
 }): Promise<string | null> {
   if (args.connector === "microsoft") {
     const profile = await nangoProxy<JsonRecord>({ ...args, path: "/v1.0/me" });
@@ -278,6 +349,7 @@ export async function listNangoMessageIds(args: {
   integrationId: string;
   connector: EmailConnector;
   limit?: number;
+  credentialSlot?: NangoCredentialSlot;
 }): Promise<string[]> {
   const limit = Math.min(Math.max(args.limit ?? 20, 1), 50);
   if (args.connector === "microsoft") {
@@ -310,6 +382,7 @@ export async function getNangoMessage(args: {
   integrationId: string;
   connector: EmailConnector;
   messageId: string;
+  credentialSlot?: NangoCredentialSlot;
 }): Promise<ProviderEmailMessage> {
   if (args.connector === "microsoft") {
     const message = await nangoProxy<any>({
@@ -339,20 +412,29 @@ export async function getNangoMessage(args: {
   return normalizeGmailMessage(message);
 }
 
-export async function deleteNangoConnection(args: { connectionId: string; integrationId: string }) {
+export async function deleteNangoConnection(args: {
+  connectionId: string;
+  integrationId: string;
+  credentialSlot?: NangoCredentialSlot;
+}) {
+  const credentialSlot = args.credentialSlot ?? 1;
   const query = new URLSearchParams({ provider_config_key: args.integrationId });
   try {
-    await nangoRequest(`/connections/${encodeURIComponent(args.connectionId)}?${query}`, {
-      method: "DELETE",
-    });
+    await nangoRequest(
+      `/connections/${encodeURIComponent(args.connectionId)}?${query}`,
+      { method: "DELETE" },
+      credentialSlot,
+    );
   } catch (error) {
     if (!(error instanceof NangoHttpError) || error.status !== 404) throw error;
-    await nangoRequest(`/connection/${encodeURIComponent(args.connectionId)}?${query}`, {
-      method: "DELETE",
-    });
+    await nangoRequest(
+      `/connection/${encodeURIComponent(args.connectionId)}?${query}`,
+      { method: "DELETE" },
+      credentialSlot,
+    );
   }
 }
 
 export function isNangoConfigured(): boolean {
-  return !!env("NANGO_API_KEY");
+  return getConfiguredNangoCredentialSlots().length > 0;
 }

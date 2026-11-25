@@ -241,6 +241,10 @@ export const mapSingleProductOnMl = createServerFn({ method: "POST" })
       final = { ...row, error: e instanceof Error ? e.message : String(e) };
     }
 
+    // Falha na consulta do ML não remove o vínculo já conhecido.
+    if (final.error) {
+      return { found: false, has_full: false, qualifies: false, sku: p.codigo, error: final.error };
+    }
 
     if (final.qualifies) {
       const { error } = await supabaseAdmin

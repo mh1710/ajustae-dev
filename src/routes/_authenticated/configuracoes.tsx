@@ -7,6 +7,11 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
 import { useAccess } from "@/hooks/use-access";
+import { useServerFn } from "@tanstack/react-start";
+import { changeMyPassword } from "@/lib/account-security.functions";
+import { passwordPolicyIssues } from "@/lib/password-policy";
+import { PasswordRequirements } from "@/components/login-security-steps";
+import { signInAfterPasswordChange } from "@/lib/security-gate";
 
 export const Route = createFileRoute("/_authenticated/configuracoes")({
   head: () => ({ meta: [{"title": "Configurações | Ajusta-Ê"}, {"name": "description", "content": "Gerencie as configurações da sua conta Ajusta-Ê."}, {"property": "og:title", "content": "Configurações | Ajusta-Ê"}, {"property": "og:description", "content": "Gerencie as configurações da sua conta Ajusta-Ê."}, {"property": "og:type", "content": "website"}, {"name": "twitter:card", "content": "summary"}] }),
@@ -23,6 +28,7 @@ function ConfiguracoesPage() {
   const [password, setPassword] = useState("");
   const [confirmation, setConfirmation] = useState("");
   const [changingPassword, setChangingPassword] = useState(false);
+  const changePasswordFn = useServerFn(changeMyPassword);
 
   useEffect(() => {
     if (accessLoading || access.company_restricted) return;
@@ -55,21 +61,20 @@ function ConfiguracoesPage() {
   async function changePassword(e: React.FormEvent) {
     e.preventDefault();
     if (password !== confirmation) return toast.error("As novas senhas não conferem.");
-    if (password.length < 8) return toast.error("A nova senha deve ter pelo menos 8 caracteres.");
+    const issues = passwordPolicyIssues(password);
+    if (issues.length) return toast.error(`A senha precisa ter ${issues.join(", ")}.`);
     if (password === currentPassword) return toast.error("Escolha uma senha diferente da atual.");
     setChangingPassword(true);
     try {
-      const { error } = await supabase.auth.updateUser({ password, current_password: currentPassword });
-      if (error) {
-        toast.error(error.message);
-        return;
-      }
+      const result = await changePasswordFn({ data: { new_password: password, current_password: currentPassword } });
+      // A troca encerra as sessões abertas; entramos de novo com a senha nova.
+      await signInAfterPasswordChange(result.email, password);
       setCurrentPassword("");
       setPassword("");
       setConfirmation("");
       toast.success("Senha alterada com sucesso!");
-    } catch {
-      toast.error("Não foi possível alterar a senha. Tente novamente.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Não foi possível alterar a senha. Tente novamente.");
     } finally {
       setChangingPassword(false);
     }
@@ -110,6 +115,7 @@ function ConfiguracoesPage() {
       <Card className="max-w-xl">
         <CardHeader>
           <CardTitle>Alterar senha</CardTitle>
+          <CardDescription>A senha vale por 365 dias; depois disso o sistema pede uma nova ao entrar.</CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={changePassword} className="space-y-4">
@@ -119,11 +125,12 @@ function ConfiguracoesPage() {
             </div>
             <div className="space-y-2">
               <Label htmlFor="new-password">Nova senha</Label>
-              <Input id="new-password" type="password" autoComplete="new-password" minLength={8} value={password} onChange={e => setPassword(e.target.value)} required disabled={changingPassword} />
+              <Input id="new-password" type="password" autoComplete="new-password" minLength={12} value={password} onChange={e => setPassword(e.target.value)} required disabled={changingPassword} />
+              <PasswordRequirements password={password} />
             </div>
             <div className="space-y-2">
               <Label htmlFor="confirm-password">Confirmar nova senha</Label>
-              <Input id="confirm-password" type="password" autoComplete="new-password" minLength={8} value={confirmation} onChange={e => setConfirmation(e.target.value)} required disabled={changingPassword} />
+              <Input id="confirm-password" type="password" autoComplete="new-password" minLength={12} value={confirmation} onChange={e => setConfirmation(e.target.value)} required disabled={changingPassword} />
             </div>
             <Button type="submit" disabled={changingPassword}>
               {changingPassword ? "Alterando..." : "Alterar senha"}

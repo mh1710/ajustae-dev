@@ -110,3 +110,48 @@ export const exportProducts = createServerFn({ method: "POST" })
       : hasMore ? advanced : null;
     return { csv, count: rows.length, total, next_offset: nextOffset as number | null };
   });
+/**
+ * Uma página (até 1000 produtos) da planilha de vínculo multiloja. O preço
+ * vem da política de precificação com a taxa do marketplace da multiloja;
+ * sem custo de fornecedor, usa o preço atual na loja ou o do produto.
+ */
+export const exportMultistorePage = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d: unknown) =>
+    z
+      .object({
+        company_id: z.string().uuid(),
+        bling_store_id: z.string().min(1).max(40),
+        scope: z.enum(["linked", "all"]),
+        offset: z.number().int().min(0).default(0),
+        limit: z.number().int().min(1).max(1000).default(1000),
+      })
+      .parse(d),
+  )
+  .handler(async ({ data, context }) => {
+    await assertMember(context, data.company_id);
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { data: res, error } = await (supabaseAdmin as any).rpc("multistore_export_page", {
+      _company_id: data.company_id,
+      _bling_store_id: data.bling_store_id,
+      _scope: data.scope,
+      _offset: data.offset,
+      _limit: data.limit,
+    });
+    if (error) throw new Error(error.message);
+    const r = res as {
+      total: number;
+      store_id: string;
+      store_name: string;
+      rows: { bling_product_id: string; nome: string | null; codigo: string | null; preco: number | null; fonte: string | null }[];
+    };
+    const rows = r.rows ?? [];
+    const advanced = data.offset + rows.length;
+    return {
+      total: r.total ?? 0,
+      store_id: r.store_id,
+      store_name: r.store_name,
+      rows: rows.map((x) => ({ ...x, preco: x.preco == null ? null : Number(x.preco) })),
+      next_offset: rows.length > 0 && advanced < (r.total ?? 0) ? advanced : null,
+    };
+  });

@@ -98,11 +98,12 @@ export const suggestEanBatch = createServerFn({ method: "POST" })
         if (!nome) throw new Error("Produto sem nome.");
         if (data.mode === "ml") {
           const q = nome.slice(0, 120);
-          const res = await fetch(
+          const { mlFetch, mlHttpError } = await import("@/lib/ml-http.server");
+          const res = await mlFetch(
             `https://api.mercadolibre.com/products/search?site_id=MLB&status=active&q=${encodeURIComponent(q)}`,
-            { headers: { Authorization: `Bearer ${token}` } },
+            { token },
           );
-          if (!res.ok) throw new Error(`Mercado Livre respondeu ${res.status}.`);
+          if (!res.ok) throw await mlHttpError(res, "Mercado Livre recusou a busca");
           const json = (await res.json()) as any;
           const results: any[] = Array.isArray(json?.results) ? json.results.slice(0, 10) : [];
           const scored = results

@@ -20,7 +20,11 @@ export async function refreshProspectStock(companyId: string, productIds: string
       const { alt_offers: _alt, ...outcome } = await refreshCatalogProduct(token, m.catalog_product_id, m.zip_code);
       await db.from("ml_product_matches").update({ ...outcome, checked_at: new Date().toISOString(), error: null }).eq("product_id", m.product_id);
       refreshed++;
-    } catch { continue; }
+    } catch (e) {
+      // Mantém o estoque calculado; registra o motivo (ex.: 403 do ML) para aparecer no vínculo.
+      await db.from("ml_product_matches").update({ error: e instanceof Error ? e.message : String(e) }).eq("product_id", m.product_id);
+      continue;
+    }
     await db.rpc("sync_ml_prospect_catalog_stock", { _product_id: m.product_id });
   }
   const { data: queued } = await db.rpc("enqueue_ml_prospect_stock", { _company_id: companyId, _product_ids: productIds });

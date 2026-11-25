@@ -11,12 +11,16 @@ import { AiJobsBadge } from "@/components/ai-jobs-badge";
 import { AuditJobsBadge } from "@/components/audit-jobs-badge";
 import { CompanyAccessBoundary } from "@/components/company-access-boundary";
 import { setSelectedCompanyId } from "@/hooks/use-selected-company";
+import { clearSecurityState, fetchSecurityState } from "@/lib/security-gate";
 
 export const Route = createFileRoute("/_authenticated")({
   ssr: false,
   beforeLoad: async () => {
     const { data, error } = await supabase.auth.getUser();
     if (error || !data.user) throw redirect({ to: "/auth" });
+    // Código por e-mail e senha em dia, quando exigidos; a tela de entrada conduz as etapas pendentes.
+    const security = await fetchSecurityState().catch(() => null);
+    if (!security?.ok) throw redirect({ to: "/auth" });
     return { user: data.user };
   },
   component: AuthenticatedLayout,
@@ -31,6 +35,7 @@ function AuthenticatedLayout() {
     await queryClient.cancelQueries();
     queryClient.clear();
     setSelectedCompanyId(undefined);
+    clearSecurityState();
     // Local scope: leaving on one device must not end other people's sessions on the same login.
     await supabase.auth.signOut({ scope: "local" });
     navigate({ to: "/auth", replace: true });

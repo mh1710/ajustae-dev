@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { catalogSearchGtin, validGtin } from "./ml-prospect-gtin";
+import { catalogSearchGtin, catalogSearchHasGtin, validGtin } from "./ml-prospect-gtin";
 import { mergeProspectPictures } from "./ml-prospect-photos";
 
 it("aceita somente EAN com dígito verificador válido", () => {
@@ -24,4 +24,13 @@ it("catálogo sem EAN válido continua sem EAN", () => {
 it("completa fotos com as do fornecedor sem repetir", () => {
   const pics = mergeProspectPictures(["https://a/1.jpg"], ["https://a/1.jpg|https://b/2.png|https://b/3.webp", "https://c/4.JPG"]);
   expect(pics).toEqual(["https://a/1.jpg", "https://b/2.png", "https://c/4.JPG"]);
+});
+it("produto do fornecedor casa com o catálogo só pelo mesmo EAN da busca", () => {
+  const results = [
+    { id: "MLB1", attributes: [{ id: "GTIN", value_name: "07897366206657" }] },
+    { id: "MLB2", attributes: [{ id: "GTIN", value_name: "7898169739120" }] },
+  ];
+  expect(catalogSearchHasGtin(results, "MLB1", "7897366206657")).toBe(true);
+  expect(catalogSearchHasGtin(results, "MLB2", "7897366206657")).toBe(false);
+  expect(catalogSearchHasGtin(results, "MLB9", "7897366206657")).toBe(false);
 });

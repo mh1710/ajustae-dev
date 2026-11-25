@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { supabaseAdmin } from "@/integrations/supabase/client.server";
 import { loadSupplierPrefixMap, parseSkuPrefix } from "@/lib/supplier-prefix-map";
 import { cdnImageUrlsForIntegration } from "@/lib/r2-images.server";
@@ -311,7 +312,12 @@ async function processItems(job: any, token: string) {
           checked(
             await db
               .from("bling_products")
-              .update({ url_imagens_externas: urls.join("|"), imagem_principal_url: urls[0] })
+              .update({
+                url_imagens_externas: urls.join("|"),
+                imagem_principal_url: urls[0],
+                dirty: true,
+                updated_at: new Date().toISOString(),
+              })
               .eq("id", item.product_id)
               .eq("company_id", item.company_id),
           );

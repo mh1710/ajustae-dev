@@ -22,3 +22,17 @@ export function catalogSearchGtin(results: unknown, catalogId: string): string |
     .filter(validGtin);
   return codes[0] ?? null;
 }
+
+const gtinKey = (code: string) => code.replace(/^0+/, "");
+
+/** True when the ML catalog search lists this EAN for this exact catalog ID (leading zeros ignored). */
+export function catalogSearchHasGtin(results: unknown, catalogId: string, ean: string): boolean {
+  if (!Array.isArray(results) || !/^\d{8,14}$/.test(ean)) return false;
+  const hit = results.find(r => (r as { id?: unknown })?.id === catalogId) as { attributes?: SearchAttr[] } | undefined;
+  if (!hit) return false;
+  return (hit.attributes ?? [])
+    .filter(a => ["GTIN", "EAN", "UNIVERSAL_PRODUCT_CODE"].includes(a?.id ?? ""))
+    .flatMap(a => [a.value_name, ...(a.values ?? []).map(v => v.name)])
+    .flatMap(v => String(v ?? "").split(/\D+/))
+    .some(v => v.length >= 8 && gtinKey(v) === gtinKey(ean));
+}

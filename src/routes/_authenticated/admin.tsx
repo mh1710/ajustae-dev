@@ -12,9 +12,12 @@ import {
   adminSetRole,
   adminResetPassword,
   adminDeleteUser,
+  adminSetMfaEmail,
   type AdminUser,
 } from "@/lib/admin.functions";
 import { useAccess } from "@/hooks/use-access";
+import { passwordPolicyIssues } from "@/lib/password-policy";
+import { PasswordRequirements } from "@/components/login-security-steps";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -77,6 +80,7 @@ function AdminPage() {
   const fnRole = useServerFn(adminSetRole);
   const fnPassword = useServerFn(adminResetPassword);
   const fnDelete = useServerFn(adminDeleteUser);
+  const fnMfaEmail = useServerFn(adminSetMfaEmail);
 
   const [createOpen, setCreateOpen] = useState(false);
   const [form, setForm] = useState({ nome: "", email: "", password: "", is_admin: false });
@@ -132,6 +136,18 @@ function AdminPage() {
     }
   }
 
+  async function saveMfaEmail(u: AdminUser, value: string) {
+    const next = value.trim();
+    if ((u.mfa_email ?? "") === next) return;
+    try {
+      await fnMfaEmail({ data: { user_id: u.id, mfa_email: next || null } });
+      toast.success(next ? `Códigos de ${u.email} irão para ${next}.` : `Códigos de ${u.email} irão para o próprio e-mail de login.`);
+      refresh();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Erro ao salvar o e-mail do código");
+    }
+  }
+
   async function handleDelete(u: AdminUser) {
     if (!confirm(`Excluir definitivamente ${u.email}?`)) return;
     try {
@@ -184,8 +200,10 @@ function AdminPage() {
         <CardHeader className="pb-2">
           <CardTitle className="text-base">Contas do sistema</CardTitle>
           <CardDescription>
-            Novos usuários entram sem permissão de baixar planilhas, enviar ao Bling ou usar IA.
-            Ative aqui e, se quiser, defina uma data de expiração do acesso.
+            Novos usuários entram sem permissão de baixar planilhas, enviar ao Bling ou usar IA. Ative aqui
+            e, se quiser, defina uma data de expiração do acesso. O código de login vai para o e-mail da conta, ou para o
+            e-mail informado em “E-mail do código”. Senhas precisam de 12 caracteres com letra, número e caractere
+            especial e vencem após 365 dias.
           </CardDescription>
         </CardHeader>
         <CardContent className="overflow-x-auto">
@@ -204,6 +222,7 @@ function AdminPage() {
                   <TableHead className="text-center">Enviar ao Bling</TableHead>
                   <TableHead className="text-center">IA</TableHead>
                   <TableHead>Acesso até</TableHead>
+                  <TableHead>E-mail do código</TableHead>
                   <TableHead className="text-right">Ações</TableHead>
                 </TableRow>
               </TableHeader>
@@ -223,6 +242,11 @@ function AdminPage() {
                           {expired && (
                             <Badge variant="destructive" className="text-[10px]">
                               expirado
+                            </Badge>
+                          )}
+                          {u.password_expired && (
+                            <Badge variant="secondary" className="text-[10px]">
+                              precisa de senha nova
                             </Badge>
                           )}
                         </div>
@@ -276,6 +300,20 @@ function AdminPage() {
                           }
                         />
                       </TableCell>
+                      <TableCell>
+                        <Input
+                          key={`${u.id}-${u.mfa_email ?? ""}`}
+                          type="email"
+                          className="h-8 w-[210px]"
+                          placeholder={u.email}
+                          defaultValue={u.mfa_email ?? ""}
+                          aria-label="E-mail que recebe o código de login"
+                          onBlur={(e) => saveMfaEmail(u, e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+                          }}
+                        />
+                      </TableCell>
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-1">
                           <Button
@@ -298,7 +336,7 @@ function AdminPage() {
                 })}
                 {rows.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={8} className="text-center text-muted-foreground">
+                    <TableCell colSpan={9} className="text-center text-muted-foreground">
                       Nenhum usuário encontrado.
                     </TableCell>
                   </TableRow>
@@ -336,12 +374,13 @@ function AdminPage() {
               />
             </div>
             <div className="space-y-1">
-              <Label>Senha (mínimo 8 caracteres)</Label>
+              <Label>Senha</Label>
               <Input
                 type="text"
                 value={form.password}
                 onChange={(e) => setForm({ ...form, password: e.target.value })}
               />
+              <PasswordRequirements password={form.password} />
             </div>
             <div className="flex items-center gap-2">
               <Switch
@@ -358,7 +397,7 @@ function AdminPage() {
             </Button>
             <Button
               onClick={() => createMut.mutate()}
-              disabled={createMut.isPending || !form.email || form.password.length < 8}
+              disabled={createMut.isPending || !form.email || passwordPolicyIssues(form.password).length > 0}
             >
               {createMut.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Criar usuário
@@ -379,11 +418,12 @@ function AdminPage() {
             value={newPwd}
             onChange={(e) => setNewPwd(e.target.value)}
           />
+          <PasswordRequirements password={newPwd} />
           <DialogFooter>
             <Button variant="outline" onClick={() => setPwdUser(null)}>
               Cancelar
             </Button>
-            <Button onClick={handlePassword} disabled={newPwd.length < 8}>
+            <Button onClick={handlePassword} disabled={passwordPolicyIssues(newPwd).length > 0}>
               Salvar
             </Button>
           </DialogFooter>

@@ -94,15 +94,21 @@ export function CrossCompanyImportCard({ companyId }: { companyId: string | unde
     try {
       const newIds: string[] = [];
       let inserted = 0;
+      let noPrice = 0;
       for (let i = 0; i < ids.length; i += 500) {
         const r = await doImport({
           data: { company_id: companyId, source_product_ids: ids.slice(i, i + 500), zero_stock: zeroStock },
         });
         inserted += r.inserted;
+        noPrice += r.no_price ?? 0;
         newIds.push(...r.ids);
         setProgress({ done: Math.min(i + 500, ids.length), total: ids.length });
       }
       toast.success(`${inserted.toLocaleString("pt-BR")} produto(s) importado(s) para esta empresa.`);
+      if (noPrice > 0)
+        toast.warning(
+          `${noPrice.toLocaleString("pt-BR")} produto(s) não foram importados: sem preço de venda pelas regras desta empresa (confira o marketplace padrão na Precificação).`,
+        );
       if (createInBling && newIds.length > 0) {
         startPhase(`Colocando ${newIds.length.toLocaleString("pt-BR")} produto(s) na fila de cadastro do Bling`);
         try {
@@ -196,14 +202,20 @@ export function CrossCompanyImportCard({ companyId }: { companyId: string | unde
       const ids = Array.from(selected);
       const newIds: string[] = [];
       let inserted = 0;
+      let noPrice = 0;
       for (let i = 0; i < ids.length; i += 500) {
         const r = await doImport({
           data: { company_id: companyId, source_product_ids: ids.slice(i, i + 500), zero_stock: zeroStock },
         });
         inserted += r.inserted;
+        noPrice += r.no_price ?? 0;
         newIds.push(...r.ids);
       }
       toast.success(`${inserted.toLocaleString("pt-BR")} produto(s) importado(s) para esta empresa.`);
+      if (noPrice > 0)
+        toast.warning(
+          `${noPrice.toLocaleString("pt-BR")} produto(s) não foram importados: sem preço de venda pelas regras desta empresa (confira o marketplace padrão na Precificação).`,
+        );
 
       if (createInBling && newIds.length > 0) {
         try {

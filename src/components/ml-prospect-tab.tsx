@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { offersStillBlocked } from "@/lib/ml-prospect-block";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { toast } from "sonner";
@@ -221,7 +222,7 @@ export function MlProspectTab({ companyId }: { companyId: string | null }) {
     if (picked.size === 0) return;
     const ids = [...picked];
     setImporting(true);
-    setProgress({ done: 0, total: ids.length, imported: 0, skipped: 0, shortened: 0, anatel: 0, step: "Buscando NCM, Anatel, medidas, fotos e descrição…" });
+    setProgress({ done: 0, total: ids.length, imported: 0, skipped: 0, shortened: 0, anatel: 0, step: "Completando NCM, medidas, fotos e descrição (fornecedores, Amazon e Mercado Livre)…" });
     const results: PreparedProspect[] = [];
     let done = 0;
     const queue = [...ids];
@@ -257,7 +258,7 @@ export function MlProspectTab({ companyId }: { companyId: string | null }) {
           <div className="flex flex-wrap items-center justify-between gap-2">
             <span className="flex items-center gap-2 font-medium">
               {(starting || running) && <Loader2 className="h-4 w-4 animate-spin" />}
-              {starting ? "Iniciando garimpo…" : running ? (job.data?.candidates_total ? "Analisando produtos" : "Buscando candidatos") : job.data?.status === "cancelado" ? "Garimpo cancelado" : job.data?.status === "erro" ? "Busca interrompida" : "Busca encerrada"}
+              {starting ? "Iniciando garimpo…" : running && offersStillBlocked(job.data?.params, Date.now()) ? "Pausado: aguardando o Mercado Livre liberar" : running ? (job.data?.candidates_total ? "Analisando produtos" : "Buscando candidatos") : job.data?.status === "cancelado" ? "Garimpo cancelado" : job.data?.status === "erro" ? "Busca interrompida" : "Busca encerrada"}
             </span>
             {running && <Button variant="destructive" size="sm" onClick={cancel}><X className="mr-1 h-4 w-4" />Cancelar</Button>}
           </div>
@@ -278,7 +279,7 @@ export function MlProspectTab({ companyId }: { companyId: string | null }) {
           </CardTitle>
           <CardDescription>
             Procura no Mercado Livre produtos que a conta ainda não tem, com entrega
-            conforme a modalidade escolhida, dentro do custo, peso e comprimento definidos. Não traz medicamentos.
+            conforme a modalidade escolhida, dentro do custo, peso e comprimento definidos. Não traz medicamentos (na coleta rápida só prazo, preço e EAN filtram).
             Cadastro no Bling somente após revisão e aprovação em todas as regras ativas, incluindo fotos.
           </CardDescription>
         </CardHeader>
@@ -308,7 +309,8 @@ export function MlProspectTab({ companyId }: { companyId: string | null }) {
                 type="number"
                 min={1}
                 value={maxWeight}
-                onChange={(e) => setMaxWeight(Math.max(1, Number(e.target.value) || 1))}
+                max={30}
+                onChange={(e) => setMaxWeight(Math.min(30, Math.max(1, Number(e.target.value) || 1)))}
               />
             </div>
             <div>
@@ -317,7 +319,8 @@ export function MlProspectTab({ companyId }: { companyId: string | null }) {
                 type="number"
                 min={1}
                 value={maxLength}
-                onChange={(e) => setMaxLength(Math.max(1, Number(e.target.value) || 1))}
+                max={70}
+                onChange={(e) => setMaxLength(Math.min(70, Math.max(1, Number(e.target.value) || 1)))}
               />
             </div>
           </div>
@@ -353,8 +356,8 @@ export function MlProspectTab({ companyId }: { companyId: string | null }) {
               disabled={starting || running}
             />
             <span>
-              Coleta rápida: buscar só por prazo, custo, EAN, peso e comprimento
-              <span className="block text-xs text-muted-foreground">Fotos, medidas e NCM são completados depois; nada vai ao Bling sem passar em todas as regras.</span>
+              Coleta rápida: buscar só por prazo, preço e EAN
+              <span className="block text-xs text-muted-foreground">Fotos, peso, medidas, NCM e Anatel são completados ao importar; só vão ao Bling os 100% completos, até 30 kg e 70 cm.</span>
             </span>
           </label>
           <label className="flex items-center gap-2 text-sm">
@@ -443,7 +446,7 @@ export function MlProspectTab({ companyId }: { companyId: string | null }) {
             produto. Selecione os que quiser e importe para a empresa selecionada: o SKU será
             ML + código do produto, o custo será o preço do Mercado Livre, o preço de venda é
             calculado pela regra da empresa. Ao importar, buscamos NCM, Anatel, marca, peso, medidas,
-            fotos e descrição pelo EAN; você confere cada produto antes do cadastro.
+            fotos e descrição pelo EAN; só os produtos 100% completos vão ao Bling, sem conferência um por um.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3 overflow-auto">

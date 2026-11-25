@@ -1,10 +1,11 @@
 import { supabaseAdmin } from "@/integrations/supabase/client.server";
 import { mergeExactMeasures, measureKeys, type MeasureDonor, type ProspectMeasures } from "./ml-prospect-measures";
 import {
-  ANATEL_NOT_APPLICABLE, buildShortDescription, catalogAttributes, catalogDescription, cleanResearchText, fillMeasures,
-  fitTitle, measureLimitIssue, missingProspectData, normalizeAnatel, normalizeNcm, researchAnatel, researchNcm,
-  type ProspectResearch,
+  ANATEL_NOT_APPLICABLE, buildShortDescription, catalogDescription, cleanResearchText,
+  fillFromAmazon, fitTitle, measureLimitIssue, normalizeAnatel, normalizeNcm, prospectLimits,
 } from "./ml-prospect-prepare";
+import type { MlEanData } from "./ml-ean-lookup.server";
+import type { AmazonProduct } from "./amazon-catalog";
 
 const db = supabaseAdmin as any;
 const MAX_PHOTOS = 18;
@@ -24,8 +25,8 @@ function cm(value: unknown, unit: string | null): number | null {
 
 /**
  * Gathers every value the audit needs from exact-EAN sources (supplier catalogs, products already
- * registered in Bling, imported Anatel base) and, for what is still missing, web research.
- * Everything is saved as an unconfirmed suggestion: NCM and Anatel keep their per-product confirmation.
+ * registered in Bling, imported Anatel base), then the Mercado Livre catalog and Amazon Brasil by the
+ * same EAN. No credit-consuming AI or web research is used: what these sources lack stays pending.
  */
 export async function prepareProspect(companyId: string, itemId: string) {
   const { data: item, error } = await db.from("ml_prospect_items").select("*").eq("id", itemId).single();
@@ -39,12 +40,20 @@ export async function prepareProspect(companyId: string, itemId: string) {
   const confirmed = review.ncm_confirmed === true && review.anatel_confirmed === true;
   const sources: Record<string, string> = {};
 
-  const [suppliers, registered, anatelBase] = await Promise.all([
-    db.from("fornecedor_produtos").select("ncm,marca,peso,altura,largura,comprimento,descricao_tecnica").eq("codigobarras", ean).eq("ativo", true).limit(20),
-    db.from("bling_products").select("ncm,marca,peso_bruto,peso_liquido,largura,altura,profundidade,unidade_medida").eq("gtin", ean).limit(20),
-    db.from("anatel_products").select("codigo_anatel").eq("ean", ean).limit(5),
+  const { eanVariants } = await import("./ml-prospect-anatel");
+  const eans = eanVariants(ean);
+  const [suppliers, registered] = await Promise.all([
+    db.from("fornecedor_produtos").select("codigo,ncm,marca,peso,altura,largura,comprimento,descricao_tecnica").eq("codigobarras", ean).eq("ativo", true).limit(20),
+    db.from("bling_products").select("codigo,ncm,marca,peso_bruto,peso_liquido,largura,altura,profundidade,unidade_medida").eq("gtin", ean).limit(20),
   ]);
-  for (const r of [suppliers, registered, anatelBase]) if (r.error) throw new Error("Não foi possível consultar as bases internas pelo EAN.");
+  for (const r of [suppliers, registered]) if (r.error) throw new Error("Não foi possível consultar as bases internas pelo EAN.");
+  // Anatel base: same EAN (with or without leading zeros) or the SKU of a supplier/Bling product with that EAN.
+  const sameEanCodes = [...new Set([...(suppliers.data ?? []), ...(registered.data ?? [])].map((r: any) => String(r.codigo ?? "").trim()).filter(Boolean))].slice(0, 40);
+  const [anatelByEan, anatelByCode] = await Promise.all([
+    db.from("anatel_products").select("codigo_anatel").in("ean", eans.length ? eans : [ean]).limit(20),
+    sameEanCodes.length ? db.from("anatel_products").select("codigo_anatel").in("codigo", sameEanCodes).limit(20) : Promise.resolve({ data: [], error: null }),
+  ]);
+  if (anatelByEan.error || anatelByCode.error) throw new Error("Não foi possível consultar a base Anatel pelo EAN.");
   const supplierRows = (suppliers.data ?? []) as any[];
   const registeredRows = (registered.data ?? []) as any[];
 
@@ -69,65 +78,105 @@ export async function prepareProspect(companyId: string, itemId: string) {
   const measureSources: Record<string, string | string[]> = { ...(raw.measurement_sources ?? {}), ...merged.sources };
 
   let marca: string | null = String(item.marca ?? "").trim() || unique(supplierRows.map(r => String(r.marca ?? "").trim())) || null;
+  const product = raw.product ?? null;
+
+  // Mercado Livre catalog products publishing the same exact EAN (free, no AI).
+  let ml: MlEanData | null = null;
+  let mlError: string | null = null;
+  const initialBody = cleanResearchText(catalogDescription(product));
+  const needsMl = measureKeys.some(k => !(Number(measures[k]) > 0)) || !marca || initialBody.length < 150 || (Array.isArray(item.pictures) ? item.pictures.length : 0) < 3;
+  if (needsMl) {
+    try {
+      const { getMlAccessToken } = await import("./mercadolivre.server");
+      const { lookupMlByEan } = await import("./ml-ean-lookup.server");
+      ml = await lookupMlByEan(await getMlAccessToken(), ean, measures);
+    } catch (e) { mlError = e instanceof Error ? e.message : "Falha na consulta ao catálogo do Mercado Livre."; }
+  }
+  if (ml?.found) {
+    for (const key of measureKeys) {
+      if (!(Number(measures[key]) > 0) && Number(ml.measures[key]) > 0) {
+        measures = { ...measures, [key]: ml.measures[key] };
+        measureSources[key] = ml.measureSources[key] ?? `Catálogo Mercado Livre (mesmo EAN)`;
+      }
+    }
+    if (!marca && ml.brand) { marca = ml.brand; sources.marca = "Catálogo Mercado Livre (mesmo EAN)"; }
+    sources.ml_catalogo = ml.catalogIds.join(", ");
+  }
+
+  // Amazon Brasil (same exact EAN) completes what ML and the internal bases left empty.
+  let amazon: AmazonProduct | null = null;
+  let amazonError: string | null = null;
+  try {
+    const { lookupAmazonByEan } = await import("./amazon-catalog.server");
+    amazon = await lookupAmazonByEan(ean);
+  } catch (e) { amazonError = e instanceof Error ? e.message : "Falha na consulta à Amazon."; }
+  if (amazon) {
+    const label = `Amazon (mesmo EAN, ASIN ${amazon.asin})`;
+    const filled = fillFromAmazon(measures, amazon);
+    measures = filled.measures;
+    for (const key of filled.keys) measureSources[key] = `${label} — ${amazon.measures.kind ?? "medidas"}`;
+    if (!ncm && amazon.ncm) { ncm = amazon.ncm; ncmSource = label; }
+    if (!marca && amazon.brand) { marca = amazon.brand; sources.marca = label; }
+    sources.amazon = label;
+  }
   let anatel = confirmed ? normalizeAnatel(review.anatel) : null;
   if (!anatel) {
-    const code = unique(((anatelBase.data ?? []) as any[]).map(r => normalizeAnatel(r.codigo_anatel)).filter(c => c && c !== ANATEL_NOT_APPLICABLE));
-    if (code) { anatel = code; sources.anatel = "Base Anatel importada (mesmo EAN)"; }
+    const byEan = unique(((anatelByEan.data ?? []) as any[]).map(r => normalizeAnatel(r.codigo_anatel)).filter(c => c && c !== ANATEL_NOT_APPLICABLE));
+    const byCode = unique(((anatelByCode.data ?? []) as any[]).map(r => normalizeAnatel(r.codigo_anatel)).filter(c => c && c !== ANATEL_NOT_APPLICABLE));
+    if (byEan) { anatel = byEan; sources.anatel = "Base Anatel (mesmo EAN)"; }
+    else if (byCode) { anatel = byCode; sources.anatel = "Base Anatel (SKU de fornecedor/Bling com o mesmo EAN)"; }
+  }
+  // Official Anatel homologations: exact model code from the ML sheet/title, same brand, single number.
+  if (!anatel && marca) {
+    const { anatelModelTokens, pickOfficialAnatel } = await import("./ml-prospect-anatel");
+    const tokens = anatelModelTokens(product?.attributes, item.titulo).slice(0, 30);
+    if (tokens.length) {
+      const { data: models, error: modelError } = await db.from("anatel_homologacao_modelos").select("numero").in("modelo_norm", tokens).limit(200);
+      if (modelError) throw new Error("Não foi possível consultar a base oficial da Anatel.");
+      const numbers = [...new Set(((models ?? []) as any[]).map(m => String(m.numero)))].slice(0, 200);
+      if (numbers.length) {
+        const { data: homologs, error: homologError } = await db.from("anatel_homologacoes").select("numero,fabricante,solicitante,nome_comercial").in("numero", numbers);
+        if (homologError) throw new Error("Não foi possível consultar a base oficial da Anatel.");
+        const code = pickOfficialAnatel(homologs ?? [], marca);
+        if (code) { anatel = code; sources.anatel = "Base oficial Anatel (modelo e marca iguais)"; }
+      }
+    }
+  }
+  // Products that clearly cannot transmit (title, category and ML sheet) get "Não se aplica"; others need a sourced code.
+  if (!anatel) {
+    const { prospectMayHaveRadio } = await import("./ml-prospect-anatel");
+    if (!prospectMayHaveRadio({ title: item.titulo, categoryPath: item.category_path, domainId: item.domain_id, attributes: product?.attributes })) {
+      anatel = ANATEL_NOT_APPLICABLE;
+      sources.anatel = "Produto sem rádio/transmissor (título, categoria e ficha do Mercado Livre)";
+    }
   }
 
-  const product = raw.product ?? null;
-  let body = cleanResearchText(catalogDescription(product));
+  let body = initialBody;
   if (body.length < 150) body = cleanResearchText(unique(supplierRows.map(r => String(r.descricao_tecnica ?? "").trim())) ?? body);
+  if (body.length < 150 && ml && ml.description.length > body.length) { body = cleanResearchText(ml.description); sources.descricao = "Catálogo Mercado Livre (mesmo EAN)"; }
+  if (body.length < 150 && amazon && amazon.description.length > body.length) { body = cleanResearchText(amazon.description); sources.descricao = `Amazon (ASIN ${amazon.asin})`; }
   let title = String(review.titulo ?? "").trim() || String(item.titulo ?? "").trim();
-
-  const preliminary = buildShortDescription(body, anatel);
-  const missing = missingProspectData({ ...item, ncm, marca, ...measures }, anatel, preliminary);
-  if (title.length > 60) missing.push("título");
-  let research: ProspectResearch | null = null;
-  let researchError: string | null = null;
-  if (missing.length) {
-    try {
-      const { researchProspect } = await import("./ml-prospect-research.server");
-      research = await researchProspect({ ean, title: String(item.titulo ?? ""), brand: marca, attributes: catalogAttributes(product), missing });
-    } catch (e) { researchError = e instanceof Error ? e.message : "Falha na pesquisa na internet."; }
-  }
-  if (research) {
-    const foundNcm = researchNcm(research);
-    if (!ncm && foundNcm) { ncm = foundNcm.ncm; ncmSource = foundNcm.source; }
-    const filled = fillMeasures(measures, research);
-    measures = filled.measures;
-    Object.assign(measureSources, filled.sources);
-    if (!marca && research.brand?.trim()) { marca = research.brand.trim(); sources.marca = "Pesquisa na internet"; }
-    if (!anatel) {
-      anatel = researchAnatel(research);
-      if (anatel) sources.anatel = anatel === ANATEL_NOT_APPLICABLE ? "Produto sem rádio/transmissor (pesquisa)" : `Pesquisa: ${research.anatel.source_url}`;
-    }
-    // A second, measures-only search when the general one left package data missing.
-    const stillMissing = measureKeys.filter(k => !(Number(measures[k]) > 0));
-    if (stillMissing.length) {
-      try {
-        const { researchProspect } = await import("./ml-prospect-research.server");
-        const focused = await researchProspect({ ean, title: String(item.titulo ?? ""), brand: marca, attributes: catalogAttributes(product), missing: stillMissing, focus: "medidas" });
-        const more = fillMeasures(measures, focused);
-        measures = more.measures;
-        Object.assign(measureSources, more.sources);
-      } catch { /* missing measures stay editable in the confirmation */ }
-    }
-    const researched = cleanResearchText(research.description);
-    if (body.length < 150 && researched.length > body.length) { body = researched; sources.descricao = "Pesquisa na internet"; }
-    if (title.length > 60 && research.title_60) title = research.title_60;
-  }
   title = fitTitle(title);
   const descricao = confirmed && review.descricao_curta ? String(review.descricao_curta) : buildShortDescription(body, anatel);
   const { completeProspectPictures } = await import("./ml-prospect-fiscal.server");
   const photos = await completeProspectPictures(ean, item.pictures);
-  const pictures = photos.pictures.slice(0, MAX_PHOTOS);
+  let pictures = photos.pictures.slice(0, MAX_PHOTOS);
+  if (pictures.length < 3 && ml?.pictures.length) {
+    const { mergeProspectPictures } = await import("./ml-prospect-photos");
+    pictures = mergeProspectPictures(pictures, ml.pictures).slice(0, MAX_PHOTOS);
+    sources.fotos = "Catálogo Mercado Livre (mesmo EAN)";
+  }
+  if (pictures.length < 3 && amazon?.pictures.length) {
+    const { mergeProspectPictures } = await import("./ml-prospect-photos");
+    pictures = mergeProspectPictures(pictures, amazon.pictures).slice(0, MAX_PHOTOS);
+    sources.fotos = sources.fotos ? `${sources.fotos} + Amazon (ASIN ${amazon.asin})` : `Amazon (ASIN ${amazon.asin})`;
+  }
 
   const nextRaw = {
     ...raw,
     measurement_sources: measureSources,
     review: { ...review, titulo: title, anatel: anatel ?? "", descricao_curta: descricao, ncm_confirmed: confirmed, anatel_confirmed: confirmed },
-    prepared: { at: new Date().toISOString(), sources, identity_note: research?.identity_note ?? null, research_error: researchError },
+    prepared: { at: new Date().toISOString(), sources, identity_note: null, research_error: null, ml_error: mlError, amazon_asin: amazon?.asin ?? null, amazon_error: amazonError },
   };
   const update = {
     ncm, ncm_fonte: ncmSource, marca, ...measures, pictures, pictures_count: pictures.length,
@@ -156,7 +205,8 @@ export async function prospectBlockers(companyId: string, row: Record<string, an
   const simulated = { ...row, raw: { ...row.raw, review: { ...review, ncm_confirmed: true, anatel_confirmed: true } } };
   const { issues } = await reviewProspect(companyId, simulated, false);
   const blockers = issues.filter(i => !EDITABLE_RULES.has(i.rule)).map(i => i.message);
-  const limit = measureLimitIssue(row as ProspectMeasures, Number(params.max_weight_kg ?? 30), Number(params.max_length_cm ?? 70));
+  const { maxWeightKg, maxLengthCm } = prospectLimits(params);
+  const limit = measureLimitIssue(row as ProspectMeasures, maxWeightKg, maxLengthCm);
   if (limit) blockers.push(limit);
   return [...new Set(blockers)];
 }

@@ -7,7 +7,7 @@ import { createFileRoute } from "@tanstack/react-router";
  * atualização dos fornecedores nas automações.
  */
 const BATCH = 300;
-const CONCURRENCY = 8;
+const CONCURRENCY = 4; // a cota do ML (ml-http.server) limita a 4 consultas por segundo
 const TIME_BUDGET_MS = 22_000;
 // Cobertura diária: tudo que não foi reconsultado nas últimas 20h entra na fila.
 

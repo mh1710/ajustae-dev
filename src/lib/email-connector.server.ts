@@ -59,6 +59,12 @@ export function getEmailConnectorPublicConfig(origin?: string) {
   const allowedSenders = getAllowedSenderRules();
   const provider = getEmailConnectorProvider();
   const nangoConfigured = !!env("NANGO_API_KEY");
+  const nangoCredentialCount = [env("NANGO_API_KEY"), env("NANGO_API_KEY_SECONDARY")].filter(
+    Boolean,
+  ).length;
+  const parsedNangoLimit = Number.parseInt(env("NANGO_CONNECTIONS_PER_KEY") || "10", 10);
+  const nangoConnectionsPerCredential =
+    Number.isFinite(parsedNangoLimit) && parsedNangoLimit > 0 ? parsedNangoLimit : 10;
   const nylasConfigured = !!env("NYLAS_CLIENT_ID") && !!env("NYLAS_API_KEY");
   return {
     provider,
@@ -69,7 +75,9 @@ export function getEmailConnectorPublicConfig(origin?: string) {
     webhook_url: getEmailWebhookUri(origin),
     allowed_senders: allowedSenders,
     code_ttl_minutes: getCodeTtlMinutes(),
-    free_connected_accounts: provider === "nango" ? 10 : 5,
+    free_connected_accounts:
+      provider === "nango" ? nangoCredentialCount * nangoConnectionsPerCredential : 5,
+    nango_credential_slots: provider === "nango" ? nangoCredentialCount : 0,
     supported_connectors:
       provider === "nango" && !env("NANGO_OUTLOOK_INTEGRATION_ID")
         ? (["google"] as const)
@@ -373,6 +381,7 @@ export async function syncNangoConnection(connection: {
   user_id: string;
   provider_grant_id: string;
   provider_name?: string | null;
+  provider_credential_slot?: number | null;
   status: string;
 }) {
   const db = supabaseAdmin as any;
@@ -380,13 +389,15 @@ export async function syncNangoConnection(connection: {
   const { connectorForNangoIntegration, getNangoMessage, listNangoMessageIds } =
     await import("@/lib/email-nango.server");
   const integrationId = String(connection.provider_name ?? "").trim();
-  const connector = connectorForNangoIntegration(integrationId);
+  const credentialSlot = connection.provider_credential_slot === 2 ? 2 : 1;
+  const connector = connectorForNangoIntegration(integrationId, credentialSlot);
   if (!connector) throw new Error("Integração Nango desconhecida para esta conexão.");
   const ids = await listNangoMessageIds({
     connectionId: connection.provider_grant_id,
     integrationId,
     connector,
     limit: 20,
+    credentialSlot,
   });
   const { data: existing, error: existingError } = ids.length
     ? await db
@@ -405,6 +416,7 @@ export async function syncNangoConnection(connection: {
       integrationId,
       connector,
       messageId,
+      credentialSlot,
     });
     const result = await storeEmailMessage(connection, message);
     if (result.stored) stored += 1;
@@ -427,10 +439,20 @@ export async function syncAllNangoConnections(limit = 10) {
     .order("last_sync_at", { ascending: true, nullsFirst: true })
     .limit(Math.min(Math.max(limit, 1), 25));
   if (error) throw new Error(error.message);
+  const ids = (data ?? []).map((connection: any) => connection.id);
+  const { data: slotRows } = ids.length
+    ? await db.from("email_connections").select("id,provider_credential_slot").in("id", ids)
+    : { data: [] };
+  const slots = new Map(
+    (slotRows ?? []).map((row: any) => [row.id, row.provider_credential_slot === 2 ? 2 : 1]),
+  );
   const results: Array<{ id: string; checked: number; stored: number; error?: string }> = [];
   for (const connection of data ?? []) {
     try {
-      const result = await syncNangoConnection(connection);
+      const result = await syncNangoConnection({
+        ...connection,
+        provider_credential_slot: slots.get(connection.id) ?? 1,
+      });
       results.push({ id: connection.id, ...result });
     } catch (syncError) {
       const message = syncError instanceof Error ? syncError.message : "Falha na leitura Nango.";

@@ -47,7 +47,12 @@ async function connectionForActor(
   if (data.user_id !== context.userId && !(await isGlobalAdmin(context))) {
     throw new Error("Você não pode acessar a conexão de outro usuário.");
   }
-  return data;
+  const { data: slotRow } = await db
+    .from("email_connections")
+    .select("provider_credential_slot")
+    .eq("id", connectionId)
+    .maybeSingle();
+  return { ...data, provider_credential_slot: slotRow?.provider_credential_slot ?? 1 };
 }
 
 function auditMetadata() {
@@ -102,18 +107,46 @@ export const startEmailConnection = createServerFn({ method: "POST" })
         .select("nome, email")
         .eq("id", context.userId)
         .maybeSingle();
-      const { createNangoConnectSession } = await import("@/lib/email-nango.server");
+      const {
+        createNangoConnectSession,
+        getConfiguredNangoCredentialSlots,
+        selectNangoCredentialSlot,
+      } = await import("@/lib/email-nango.server");
+      let credentialSlot: 1 | 2 = 1;
+      if (getConfiguredNangoCredentialSlots().includes(2)) {
+        const { data: activeConnections, error: activeConnectionsError } = await db
+          .from("email_connections")
+          .select("provider_credential_slot")
+          .eq("provider", "nango")
+          .eq("status", "connected");
+        if (activeConnectionsError) {
+          throw new Error(
+            "A segunda credencial Nango exige a migration 20261124100000_nango_credential_pool.sql.",
+          );
+        }
+        const activeBySlot = (activeConnections ?? []).reduce(
+          (counts: Record<1 | 2, number>, row: { provider_credential_slot?: number | null }) => {
+            const slot = row.provider_credential_slot === 2 ? 2 : 1;
+            counts[slot] += 1;
+            return counts;
+          },
+          { 1: 0, 2: 0 },
+        );
+        credentialSlot = selectNangoCredentialSlot(activeBySlot);
+      }
       const session = await createNangoConnectSession({
         userId: context.userId,
         userEmail: String(profile?.email ?? context.claims?.email ?? "").trim() || null,
         displayName: String(profile?.nome ?? "").trim() || null,
         connector,
+        credentialSlot,
       });
       return {
         provider: "nango" as const,
         session_token: session.token,
         expires_at: session.expires_at,
         integration_id: session.integration_id,
+        credential_slot: session.credential_slot,
       };
     }
     const state = randomUrlSafe(32);
@@ -140,6 +173,7 @@ export const completeNangoEmailConnection = createServerFn({ method: "POST" })
       .object({
         connection_id: z.string().min(1).max(200),
         integration_id: z.string().min(1).max(100),
+        credential_slot: z.union([z.literal(1), z.literal(2)]),
       })
       .parse(value),
   )
@@ -151,21 +185,33 @@ export const completeNangoEmailConnection = createServerFn({ method: "POST" })
       getNangoMailboxEmail,
       getNangoReadonlyScopes,
     } = await import("@/lib/email-nango.server");
-    const connector = connectorForNangoIntegration(data.integration_id);
+    const connector = connectorForNangoIntegration(data.integration_id, data.credential_slot);
     if (!connector) throw new Error("Integração Nango não autorizada neste ambiente.");
     await assertNangoConnectionOwnership({
       connectionId: data.connection_id,
       integrationId: data.integration_id,
       userId: context.userId,
+      credentialSlot: data.credential_slot,
     });
     const email = await getNangoMailboxEmail({
       connectionId: data.connection_id,
       integrationId: data.integration_id,
       connector,
+      credentialSlot: data.credential_slot,
     });
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
     const db = supabaseAdmin as any;
     const now = new Date().toISOString();
+    const { error: credentialSlotProbeError } = await db
+      .from("email_connections")
+      .select("provider_credential_slot")
+      .limit(1);
+    const supportsCredentialSlot = !credentialSlotProbeError;
+    if (!supportsCredentialSlot && data.credential_slot === 2) {
+      throw new Error(
+        "Aplique a migration 20261124100000_nango_credential_pool.sql antes de usar a segunda credencial Nango.",
+      );
+    }
     if (email) {
       await db
         .from("email_connections")
@@ -176,22 +222,25 @@ export const completeNangoEmailConnection = createServerFn({ method: "POST" })
         .neq("provider_grant_id", data.connection_id)
         .eq("status", "connected");
     }
-    const { error } = await db.from("email_connections").upsert(
-      {
-        user_id: context.userId,
-        provider: "nango",
-        provider_grant_id: data.connection_id,
-        provider_account_email: email,
-        provider_name: data.integration_id,
-        status: "connected",
-        scopes: getNangoReadonlyScopes(connector),
-        connected_at: now,
-        last_error: null,
-        revoked_at: null,
-        updated_at: now,
-      },
-      { onConflict: "provider,provider_grant_id" },
-    );
+    const connectionRow = {
+      user_id: context.userId,
+      provider: "nango",
+      provider_grant_id: data.connection_id,
+      provider_account_email: email,
+      provider_name: data.integration_id,
+      status: "connected",
+      scopes: getNangoReadonlyScopes(connector),
+      connected_at: now,
+      last_error: null,
+      revoked_at: null,
+      updated_at: now,
+      ...(supportsCredentialSlot ? { provider_credential_slot: data.credential_slot } : {}),
+    };
+    const { error } = await db.from("email_connections").upsert(connectionRow, {
+      onConflict: supportsCredentialSlot
+        ? "provider,provider_credential_slot,provider_grant_id"
+        : "provider,provider_grant_id",
+    });
     if (error) throw new Error(error.message);
     return { ok: true, email, provider: "nango" as const };
   });
@@ -346,6 +395,7 @@ export const disconnectEmailConnection = createServerFn({ method: "POST" })
         await deleteNangoConnection({
           connectionId: connection.provider_grant_id,
           integrationId: connection.provider_name,
+          credentialSlot: connection.provider_credential_slot === 2 ? 2 : 1,
         });
       } else {
         const { deleteNylasGrant } = await import("@/lib/email-connector.server");

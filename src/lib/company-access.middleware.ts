@@ -5,6 +5,8 @@ import { isCompanyFunctionAllowed } from './company-access-policy';
 
 // Default-deny for restricted accounts, including calls made outside the UI.
 export const enforceCompanyAccess = createMiddleware({ type: 'function' }).server(async ({ next, serverFnMeta }) => {
+  // Login security steps run before the session is released; their handlers validate the token themselves.
+  if (serverFnMeta.filename.replaceAll('\\', '/').endsWith('/account-security.functions.ts')) return next();
   const authorization = getRequest().headers.get('authorization');
   if (!authorization) {
     if (serverFnMeta.filename.endsWith('/bling.functions.ts') && serverFnMeta.name === 'getBlingCallbackUrlForDisplay') return next();

@@ -18,14 +18,15 @@ import { excludedProspectType } from "./ml-prospect-scope";
 import { catalogSearchGtin } from "./ml-prospect-gtin";
 import { completeMeasures, mergeExactMeasures, type MeasureDonor, type ProspectMeasures } from "./ml-prospect-measures";
 
+import { mlFetch, MlTransientError } from "./ml-http.server";
+import { parseMl403, type Ml403Detail } from "./ml-403";
+
 const ML_API = "https://api.mercadolibre.com";
 const SITE = "MLB";
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
 export class MlProspectAccessError extends Error {
-  constructor(readonly path: string) {
-    super(`Mercado Livre não autorizou acesso a ${path} (403).`);
+  constructor(readonly path: string, readonly detail: Ml403Detail | null = null) {
+    super(`Mercado Livre não autorizou acesso a ${path} (403${detail?.code ? ` ${detail.code}` : ""}${detail?.message ? `: ${detail.message}` : ""}).`);
     this.name = "MlProspectAccessError";
   }
 }
@@ -45,31 +46,35 @@ export type ProspectParams = {
   quick_collect?: boolean;
 };
 
+// Categorias do ML quase não mudam: guardar a resposta evita gastar a cota a cada candidato.
+const categoryCache = new Map<string, Record<string, unknown> | null>();
+
 export async function mlGetJson(
   token: string,
   url: string,
-  attempt = 0,
 ): Promise<Record<string, unknown> | null> {
-  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(12_000) });
-  if (res.status === 429 || res.status >= 500) {
-    if (attempt >= 3) throw new Error(`Mercado Livre indisponível (${res.status}); tente novamente.`);
-    const retryAfter = Number(res.headers.get("retry-after"));
-    const wait = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 400 * 2 ** attempt;
-    await sleep(Math.min(wait, 3000));
-    return mlGetJson(token, url, attempt + 1);
-  }
+  const path = new URL(url).pathname;
+  const cacheable = /^\/categories\/[A-Z]{3}\d+$/.test(path);
+  if (cacheable && categoryCache.has(path)) return categoryCache.get(path) ?? null;
+  const res = await mlFetch(url, { token, timeoutMs: 12_000 });
   if (res.status === 404) return null;
-  if (res.status === 403) throw new MlProspectAccessError(new URL(url).pathname);
+  if (res.status === 403) {
+    const body = await res.json().catch(() => null);
+    throw new MlProspectAccessError(path, parseMl403(path, body, res.headers));
+  }
   if (!res.ok) throw new Error(`Mercado Livre recusou a consulta (${res.status}).`);
-  return (await res.json().catch(() => null)) as Record<string, unknown> | null;
+  const json = (await res.json().catch(() => null)) as Record<string, unknown> | null;
+  if (cacheable && json) {
+    if (categoryCache.size >= 3_000) categoryCache.clear();
+    categoryCache.set(path, json);
+  }
+  return json;
 }
 
 export type CategoryOption = { id: string; name: string };
 
 export async function listSiteCategories(token: string): Promise<CategoryOption[]> {
-  const res = await fetch(`${ML_API}/sites/${SITE}/categories`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
+  const res = await mlFetch(`${ML_API}/sites/${SITE}/categories`, { token });
   if (!res.ok) return [];
   const rows = (await res.json().catch(() => [])) as CategoryOption[];
   return (rows ?? []).filter((c) => c?.id && c?.name);
@@ -151,9 +156,9 @@ export async function collectCandidates(
 
 // ---------------------------------------------------------------- avaliação
 
-type Attr = { id?: string; name?: string; value_name?: string | null; values?: Array<{ name?: string | null }> };
+export type Attr = { id?: string; name?: string; value_name?: string | null; values?: Array<{ name?: string | null }> };
 
-function identityEan(attrs: Attr[]): string | null {
+export function identityEan(attrs: Attr[]): string | null {
   const values = attrs.filter(a => ["GTIN", "EAN", "UNIVERSAL_PRODUCT_CODE"].includes(a.id ?? ""))
     .flatMap(a => [a.value_name, ...(a.values ?? []).map(v => v.name)])
     .filter((v): v is string => typeof v === "string")
@@ -253,7 +258,7 @@ async function categoryPathText(token: string, categoryId: string | null): Promi
   return names.length ? names.join(" > ") : ((json?.["name"] as string) ?? null);
 }
 
-function readMeasures(attrs: Attr[]): ProspectMeasures {
+export function readMeasures(attrs: Attr[]): ProspectMeasures {
   const positive = (value: number | null) => value !== null && value > 0 ? value : null;
   return {
     weight_kg: positive(parseWeightKg(attrValue(attrs, ["PACKAGE_WEIGHT", "WEIGHT", "NET_WEIGHT", "GROSS_WEIGHT"]))),
@@ -279,7 +284,7 @@ async function recoverMeasures(token: string, ean: string, base: ProspectMeasure
   if (completeMeasures(mergeExactMeasures(base, ean, donors).measures)) return mergeExactMeasures(base, ean, donors);
   const rows = await Promise.all([...new Set(itemIds)].slice(0, 6).map(async id => {
     try { return { id, row: await mlGetJson(token, `${ML_API}/items/${id}`) }; }
-    catch { return { id, row: null }; }
+    catch (e) { if (e instanceof MlTransientError) throw e; return { id, row: null }; }
   }));
   rows.forEach(({ id, row }) => addItem(row, `Anúncio ${id}`));
   let merged = mergeExactMeasures(base, ean, donors);
@@ -294,9 +299,9 @@ async function recoverMeasures(token: string, ean: string, base: ProspectMeasure
         const product = await mlGetJson(token, `${ML_API}/products/${hit.id}`);
         const attrs = (product?.["attributes"] as Attr[]) ?? [];
         if (identityEan(attrs) === ean) donors.push({ ean, source: `Catálogo ${hit.id}`, measures: readMeasures(attrs) });
-      } catch { /* Unavailable sources never authorize measurements. */ }
+      } catch (e) { if (e instanceof MlTransientError) throw e; /* Unavailable sources never authorize measurements. */ }
     }));
-  } catch { /* Keep missing fields unresolved. */ }
+  } catch (e) { if (e instanceof MlTransientError) throw e; /* Keep missing fields unresolved. */ }
   merged = mergeExactMeasures(base, ean, donors);
   return merged;
 }
@@ -383,7 +388,9 @@ export async function evaluateCandidate(
   const attrs = (product["attributes"] as Attr[]) ?? [];
   const title = (product["name"] as string) ?? null;
   const domainId = (product["domain_id"] as string) ?? null;
-  if (excludedProspectType(domainId, null, title))
+  // Coleta rápida filtra só por prazo, preço e EAN; o resto é completado e auditado na importação.
+  const quick = params.quick_collect === true;
+  if (!quick && excludedProspectType(domainId, null, title))
     return { ok: false, reason: "produto para ingestão ou não é objeto" };
 
   // O catálogo do ML raramente publica GTIN; quando vier, usamos para deduplicar.
@@ -398,7 +405,7 @@ export async function evaluateCandidate(
 
   const baseMeasures = readMeasures(attrs);
   const weightKg = baseMeasures.weight_kg;
-  if (weightKg !== null && weightKg > params.max_weight_kg)
+  if (!quick && weightKg !== null && weightKg > params.max_weight_kg)
     return { ok: false, reason: `peso ${weightKg} kg`, ean: eanOk };
 
   const dims = [
@@ -408,7 +415,7 @@ export async function evaluateCandidate(
   ];
   const known = dims.filter((d): d is number => d !== null);
   const largestCm = known.length ? Math.max(...known) : null;
-  if (largestCm !== null && largestCm > params.max_length_cm)
+  if (!quick && largestCm !== null && largestCm > params.max_length_cm)
     return { ok: false, reason: `comprimento ${largestCm} cm`, ean: eanOk };
 
   const offersJson = await mlGetJson(token, `${ML_API}/products/${catalogProductId}/items?limit=20`);
@@ -418,7 +425,7 @@ export async function evaluateCandidate(
   if (offers.length === 0) return { ok: false, reason: anyShipping ? "sem oferta com estoque" : "sem oferta Full", ean: eanOk };
 
   const categoryPath = await categoryPathText(token, offers[0]?.category_id ?? null);
-  if (excludedProspectType(domainId, categoryPath, title))
+  if (!quick && excludedProspectType(domainId, categoryPath, title))
     return { ok: false, reason: "produto para ingestão ou não é objeto", ean: eanOk };
 
   const limit = prospectDeliveryLimit(1);
@@ -462,7 +469,7 @@ export async function evaluateCandidate(
       measuresFailure = "peso/medidas ausentes ou conflitantes nas fontes com EAN exato";
       continue;
     }
-    if (Number(measures.weight_kg) > params.max_weight_kg || Math.max(Number(measures.length_cm), Number(measures.width_cm), Number(measures.height_cm)) > params.max_length_cm) {
+    if (!quick && (Number(measures.weight_kg) > params.max_weight_kg || Math.max(Number(measures.length_cm), Number(measures.width_cm), Number(measures.height_cm)) > params.max_length_cm)) {
       measuresFailure = "peso ou medidas acima dos limites após consulta por EAN";
       continue;
     }

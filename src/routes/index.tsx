@@ -23,7 +23,7 @@ function Landing() {
   useEffect(() => {
     getCompanySession().then(session => {
       if (session) navigate({ to: session.restricted ? "/produtos" : "/dashboard", replace: true });
-    });
+    }).catch(() => navigate({ to: "/auth", replace: true }));
   }, [navigate]);
 
   return (

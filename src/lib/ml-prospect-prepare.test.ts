@@ -20,6 +20,15 @@ describe("preparação antes de importar", () => {
     expect(text).not.toContain("1 ano");
   });
 
+  it("linha de garantia do fornecedor sai sem apagar o resto da descrição", () => {
+    const body = "<p><strong>Modelo: LA-P624<br /></strong>- Ambiente de Instalação: Interno<br />- Conectores RJ-45 montados sobre circuitos impressos totalmente protegidos<br /><strong>Garantia:</strong> 365 dias</p><p>1 - Patch Panel Cat 6 PlusCable</p>";
+    const text = buildShortDescription(body, null);
+    expect(text).toContain("Conectores RJ-45 montados sobre circuitos impressos totalmente protegidos");
+    expect(text).toContain("Patch Panel Cat 6 PlusCable");
+    expect(text).not.toContain("365 dias");
+    expect(text.match(/garantia/gi)).toHaveLength(1);
+  });
+
   it("título passa de 60 caracteres só cortando em palavra inteira", () => {
     const title = fitTitle("Fone De Ouvido Sem Fio Xiaomi Redmi Buds 6 Active Bluetooth 5.4 Preto Original");
     expect(title.length).toBeLessThanOrEqual(60);

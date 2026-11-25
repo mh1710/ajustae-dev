@@ -38,9 +38,8 @@ export const Route = createFileRoute("/api/public/mercadolivre/callback")({
 
           let nickname: string | null = null;
           try {
-            const me = await fetch("https://api.mercadolibre.com/users/me", {
-              headers: { Authorization: `Bearer ${token.access_token}` },
-            });
+            const { mlFetch } = await import("@/lib/ml-http.server");
+            const me = await mlFetch("https://api.mercadolibre.com/users/me", { token: token.access_token, maxRetries: 1 });
             if (me.ok) nickname = ((await me.json()) as { nickname?: string }).nickname ?? null;
           } catch {
             // opcional

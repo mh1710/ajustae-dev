@@ -54,6 +54,34 @@ export function fillMeasures(base: ProspectMeasures, r: ProspectResearch | null)
   return { measures, sources };
 }
 
+/** Garimpo never sends products above 30 kg or with a side above 70 cm, whatever the job asked for. */
+export const PROSPECT_MAX_WEIGHT_KG = 30;
+export const PROSPECT_MAX_LENGTH_CM = 70;
+export function prospectLimits(params: { max_weight_kg?: unknown; max_length_cm?: unknown } | null | undefined) {
+  const w = Number(params?.max_weight_kg);
+  const l = Number(params?.max_length_cm);
+  return {
+    maxWeightKg: Math.min(w > 0 ? w : PROSPECT_MAX_WEIGHT_KG, PROSPECT_MAX_WEIGHT_KG),
+    maxLengthCm: Math.min(l > 0 ? l : PROSPECT_MAX_LENGTH_CM, PROSPECT_MAX_LENGTH_CM),
+  };
+}
+
+/**
+ * Amazon fills only empty fields. Length/width/height are taken together from one Amazon set,
+ * and only when all three are still empty, so a box is never mixed from two sources.
+ */
+export function fillFromAmazon(base: ProspectMeasures, amazon: { measures: ProspectMeasures }) {
+  const measures = { ...base };
+  const keys: (keyof ProspectMeasures)[] = [];
+  const a = amazon.measures;
+  const dims = ["length_cm", "width_cm", "height_cm"] as const;
+  if (dims.every(k => !(Number(base[k]) > 0)) && dims.every(k => Number(a[k]) > 0)) {
+    for (const k of dims) { measures[k] = Number(a[k]); keys.push(k); }
+  }
+  if (!(Number(base.weight_kg) > 0) && Number(a.weight_kg) > 0) { measures.weight_kg = Number(a.weight_kg); keys.push("weight_kg"); }
+  return { measures, keys };
+}
+
 export function measureLimitIssue(m: ProspectMeasures, maxWeightKg: number, maxLengthCm: number): string | null {
   if (!completeMeasures(m)) return null;
   if (Number(m.weight_kg) > maxWeightKg) return `Peso ${m.weight_kg} kg acima do limite de ${maxWeightKg} kg do garimpo.`;
@@ -85,9 +113,12 @@ export function cleanResearchText(text: string | null | undefined): string {
 
 /** Body without any warranty mention, followed by the single standard footer the audit rules expect. */
 export function buildShortDescription(body: string, anatel: string | null): string {
-  const sentences = body.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim()
-    .split(/(?<=[.!?])\s+/).filter(s => s && !WARRANTY.test(s));
-  const text = sentences.join(" ").trim();
+  // Linhas (<br>, parágrafos, itens) e frases são filtradas separadamente: uma linha
+  // "Garantia: 365 dias" sai sozinha, sem levar junto um texto inteiro sem pontuação.
+  const lines = body.replace(/<br\s*\/?>|<\/(?:p|li|div|h\d)>|\r?\n/gi, "\n").replace(/<[^>]+>/g, " ").split("\n")
+    .map(line => line.replace(/\s+/g, " ").trim().split(/(?<=[.!?])\s+/).filter(s => s && !WARRANTY.test(s)).join(" ").trim())
+    .filter(Boolean);
+  const text = lines.join("<br>");
   const code = anatel ?? "a verificar";
   return `${text}${text ? "<br><br>" : ""}Garantia: 3 meses | Código Anatel: ${code} | Anvisa: Isento`;
 }

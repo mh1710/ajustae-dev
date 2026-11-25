@@ -25,6 +25,7 @@ import { PageNumbers } from "@/components/page-numbers";
 import { SupplierFeesModal, type SupplierFees } from "@/components/supplier-fees-modal";
 import { MercadoLivreTab } from "@/components/mercadolivre-tab";
 import { MlProspectTab } from "@/components/ml-prospect-tab";
+import { SupplierCatalogImportTab } from "@/components/supplier-catalog-import-tab";
 import { BlingSuppliersTab } from "@/components/bling-suppliers-tab";
 import { SupplierSheetImport } from "@/components/supplier-sheet-import";
 
@@ -110,7 +111,7 @@ function FornecedoresPage() {
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [view, setView] = useState<ViewKind>("all");
-  const [topTab, setTopTab] = useState<"suppliers" | "ml" | "garimpo" | "bling">("suppliers");
+  const [topTab, setTopTab] = useState<"suppliers" | "ml" | "garimpo" | "bling" | "novos">("suppliers");
 
   // Retorno da autorização do Mercado Livre
   useEffect(() => {
@@ -235,9 +236,10 @@ function FornecedoresPage() {
         </div>
       </header>
 
-      <Tabs value={topTab} onValueChange={(v) => setTopTab(v as "suppliers" | "ml" | "garimpo" | "bling")}>
+      <Tabs value={topTab} onValueChange={(v) => setTopTab(v as "suppliers" | "ml" | "garimpo" | "bling" | "novos")}>
         <TabsList>
           <TabsTrigger value="suppliers">Fornecedores</TabsTrigger>
+          <TabsTrigger value="novos">Novos do fornecedor</TabsTrigger>
           <TabsTrigger value="bling">Fornecedores no Bling</TabsTrigger>
           <TabsTrigger value="ml">Mercado Livre</TabsTrigger>
           <TabsTrigger value="garimpo">Garimpo de produtos</TabsTrigger>
@@ -247,6 +249,7 @@ function FornecedoresPage() {
       {topTab === "bling" && <BlingSuppliersTab companyId={companyId ?? null} />}
       {topTab === "ml" && <MercadoLivreTab companyId={companyId} />}
       {topTab === "garimpo" && <MlProspectTab companyId={companyId ?? null} />}
+      {topTab === "novos" && <SupplierCatalogImportTab companyId={companyId ?? null} />}
 
       <div className={topTab !== "suppliers" ? "hidden" : "space-y-6"}>
       {suppliers.isLoading ? (

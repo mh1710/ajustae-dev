@@ -61,6 +61,7 @@ import { Route as ApiPublicMercadolivreMapTickRouteImport } from './routes/api/p
 import { Route as ApiPublicMercadolivreNotificationsRouteImport } from './routes/api/public/mercadolivre/notifications'
 import { Route as ApiPublicMercadolivreProspectTickRouteImport } from './routes/api/public/mercadolivre/prospect-tick'
 import { Route as ApiPublicMercadolivreRefreshTickRouteImport } from './routes/api/public/mercadolivre/refresh-tick'
+import { Route as ApiPublicSuppliersCatalogImportTickRouteImport } from './routes/api/public/suppliers/catalog-import-tick'
 import { Route as ApiPublicSuppliersEvolusomTickRouteImport } from './routes/api/public/suppliers/evolusom-tick'
 
 const IndexRoute = IndexRouteImport.update({
@@ -347,6 +348,12 @@ const ApiPublicMercadolivreRefreshTickRoute =
     path: '/api/public/mercadolivre/refresh-tick',
     getParentRoute: () => rootRouteImport,
   } as any)
+const ApiPublicSuppliersCatalogImportTickRoute =
+  ApiPublicSuppliersCatalogImportTickRouteImport.update({
+    id: '/api/public/suppliers/catalog-import-tick',
+    path: '/api/public/suppliers/catalog-import-tick',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ApiPublicSuppliersEvolusomTickRoute =
   ApiPublicSuppliersEvolusomTickRouteImport.update({
     id: '/api/public/suppliers/evolusom-tick',
@@ -406,6 +413,7 @@ export interface FileRoutesByFullPath {
   '/api/public/mercadolivre/notifications': typeof ApiPublicMercadolivreNotificationsRoute
   '/api/public/mercadolivre/prospect-tick': typeof ApiPublicMercadolivreProspectTickRoute
   '/api/public/mercadolivre/refresh-tick': typeof ApiPublicMercadolivreRefreshTickRoute
+  '/api/public/suppliers/catalog-import-tick': typeof ApiPublicSuppliersCatalogImportTickRoute
   '/api/public/suppliers/evolusom-tick': typeof ApiPublicSuppliersEvolusomTickRoute
 }
 export interface FileRoutesByTo {
@@ -460,6 +468,7 @@ export interface FileRoutesByTo {
   '/api/public/mercadolivre/notifications': typeof ApiPublicMercadolivreNotificationsRoute
   '/api/public/mercadolivre/prospect-tick': typeof ApiPublicMercadolivreProspectTickRoute
   '/api/public/mercadolivre/refresh-tick': typeof ApiPublicMercadolivreRefreshTickRoute
+  '/api/public/suppliers/catalog-import-tick': typeof ApiPublicSuppliersCatalogImportTickRoute
   '/api/public/suppliers/evolusom-tick': typeof ApiPublicSuppliersEvolusomTickRoute
 }
 export interface FileRoutesById {
@@ -516,6 +525,7 @@ export interface FileRoutesById {
   '/api/public/mercadolivre/notifications': typeof ApiPublicMercadolivreNotificationsRoute
   '/api/public/mercadolivre/prospect-tick': typeof ApiPublicMercadolivreProspectTickRoute
   '/api/public/mercadolivre/refresh-tick': typeof ApiPublicMercadolivreRefreshTickRoute
+  '/api/public/suppliers/catalog-import-tick': typeof ApiPublicSuppliersCatalogImportTickRoute
   '/api/public/suppliers/evolusom-tick': typeof ApiPublicSuppliersEvolusomTickRoute
 }
 export interface FileRouteTypes {
@@ -572,6 +582,7 @@ export interface FileRouteTypes {
     | '/api/public/mercadolivre/notifications'
     | '/api/public/mercadolivre/prospect-tick'
     | '/api/public/mercadolivre/refresh-tick'
+    | '/api/public/suppliers/catalog-import-tick'
     | '/api/public/suppliers/evolusom-tick'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -626,6 +637,7 @@ export interface FileRouteTypes {
     | '/api/public/mercadolivre/notifications'
     | '/api/public/mercadolivre/prospect-tick'
     | '/api/public/mercadolivre/refresh-tick'
+    | '/api/public/suppliers/catalog-import-tick'
     | '/api/public/suppliers/evolusom-tick'
   id:
     | '__root__'
@@ -681,6 +693,7 @@ export interface FileRouteTypes {
     | '/api/public/mercadolivre/notifications'
     | '/api/public/mercadolivre/prospect-tick'
     | '/api/public/mercadolivre/refresh-tick'
+    | '/api/public/suppliers/catalog-import-tick'
     | '/api/public/suppliers/evolusom-tick'
   fileRoutesById: FileRoutesById
 }
@@ -716,6 +729,7 @@ export interface RootRouteChildren {
   ApiPublicMercadolivreNotificationsRoute: typeof ApiPublicMercadolivreNotificationsRoute
   ApiPublicMercadolivreProspectTickRoute: typeof ApiPublicMercadolivreProspectTickRoute
   ApiPublicMercadolivreRefreshTickRoute: typeof ApiPublicMercadolivreRefreshTickRoute
+  ApiPublicSuppliersCatalogImportTickRoute: typeof ApiPublicSuppliersCatalogImportTickRoute
   ApiPublicSuppliersEvolusomTickRoute: typeof ApiPublicSuppliersEvolusomTickRoute
 }
 
@@ -1085,6 +1099,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiPublicMercadolivreRefreshTickRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/public/suppliers/catalog-import-tick': {
+      id: '/api/public/suppliers/catalog-import-tick'
+      path: '/api/public/suppliers/catalog-import-tick'
+      fullPath: '/api/public/suppliers/catalog-import-tick'
+      preLoaderRoute: typeof ApiPublicSuppliersCatalogImportTickRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/public/suppliers/evolusom-tick': {
       id: '/api/public/suppliers/evolusom-tick'
       path: '/api/public/suppliers/evolusom-tick'
@@ -1191,6 +1212,8 @@ const rootRouteChildren: RootRouteChildren = {
   ApiPublicMercadolivreProspectTickRoute:
     ApiPublicMercadolivreProspectTickRoute,
   ApiPublicMercadolivreRefreshTickRoute: ApiPublicMercadolivreRefreshTickRoute,
+  ApiPublicSuppliersCatalogImportTickRoute:
+    ApiPublicSuppliersCatalogImportTickRoute,
   ApiPublicSuppliersEvolusomTickRoute: ApiPublicSuppliersEvolusomTickRoute,
 }
 export const routeTree = rootRouteImport

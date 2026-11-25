@@ -2,8 +2,8 @@ import { createFileRoute } from "@tanstack/react-router";
 import { timingSafeEqual } from "crypto";
 import { z } from "zod";
 
-const BATCH = 6;
-const CONCURRENCY = 6;
+const BATCH = 4;
+const CONCURRENCY = 4;
 const TIME_BUDGET_MS = 22_000;
 
 function trim(v: string | null | undefined) {
@@ -37,7 +37,9 @@ export const Route = createFileRoute("/api/public/mercadolivre/prospect-tick")({
           rpc: (fn: string, args: Record<string, unknown>) => any;
         };
         const { getMlAccessToken } = await import("@/lib/mercadolivre.server");
-        const { discoverNext, initialDiscovery, evaluateCandidate } = await import("@/lib/ml-prospect.server");
+        const { discoverNext, initialDiscovery, evaluateCandidate, MlProspectAccessError } = await import("@/lib/ml-prospect.server");
+        const { isOffersListPath, offersStillBlocked, offersBlockedMessage, ML_OFFERS_RETRY_MS } = await import("@/lib/ml-prospect-block");
+        const { MlTransientError } = await import("@/lib/ml-http.server");
 
         const { data: job } = await db
           .from("ml_prospect_jobs")
@@ -75,6 +77,11 @@ export const Route = createFileRoute("/api/public/mercadolivre/prospect-tick")({
         if (job.cancel_requested) {
           await finish("cancelado");
           return Response.json({ ok: true, cancelled: true });
+        }
+
+        // ML bloqueou a lista de ofertas: espera a pausa acabar (o vigia chama a cada minuto).
+        if (offersStillBlocked(job.params, Date.now())) {
+          return Response.json({ ok: true, waiting: "ml_offers_blocked" });
         }
 
         let token: string;
@@ -116,6 +123,13 @@ export const Route = createFileRoute("/api/public/mercadolivre/prospect-tick")({
           return true;
         };
 
+        // Limite do ML durante a descoberta: nada se perde, o próximo ciclo continua do mesmo ponto.
+        const retryLater = async (e: Error) => {
+          await db.from("ml_prospect_jobs").update({ error: e.message, updated_at: new Date().toISOString() }).eq("id", job.id);
+          await enqueueTick();
+          return Response.json({ ok: true, retry: "ml_rate_limited" });
+        };
+
         // Persist discovery a category at a time; evaluate results before expanding.
         if (job.status === "pendente" || !job.params.discovery) {
           await db
@@ -131,6 +145,7 @@ export const Route = createFileRoute("/api/public/mercadolivre/prospect-tick")({
             await enqueueTick();
             return Response.json({ ok: true, discovering: true });
           } catch (e) {
+            if (e instanceof MlTransientError) return await retryLater(e);
             await finish("erro", e instanceof Error ? e.message : String(e));
             return Response.json({ ok: false });
           }
@@ -170,6 +185,7 @@ export const Route = createFileRoute("/api/public/mercadolivre/prospect-tick")({
                 return Response.json({ ok: true, discovering: true, found });
               }
             } catch (e) {
+              if (e instanceof MlTransientError) return await retryLater(e);
               await finish("erro", e instanceof Error ? e.message : String(e));
               return Response.json({ ok: false });
             }
@@ -193,10 +209,15 @@ export const Route = createFileRoute("/api/public/mercadolivre/prospect-tick")({
             const results = await Promise.all(
               chunk.map(async (c) => {
                 try {
-                  return { c, res: await evaluateCandidate(token, c.catalog_product_id, params) };
+                  return { c, blocked: false, retry: false, detail: null, res: await evaluateCandidate(token, c.catalog_product_id, params) };
                 } catch (e) {
                   return {
                     c,
+                    // Bloqueio da lista de ofertas não é defeito do produto: volta para a fila.
+                    blocked: e instanceof MlProspectAccessError && isOffersListPath(e.path),
+                    detail: e instanceof MlProspectAccessError ? e.detail : null,
+                    // Limite de consultas (429) ou instabilidade: volta para a fila sem pausar a busca.
+                    retry: e instanceof MlTransientError,
                     res: { ok: false as const, reason: e instanceof Error ? e.message : String(e) },
                   };
                 }
@@ -286,7 +307,9 @@ export const Route = createFileRoute("/api/public/mercadolivre/prospect-tick")({
               found += keep.length;
             }
 
-            const statusRows = results.map(({ c, res }) => {
+            const blockedIds = results.filter((r) => r.blocked).map((r) => r.c.id);
+            const retryIds = results.filter((r) => r.retry && !r.blocked).map((r) => r.c.id);
+            const statusRows = results.filter((r) => !r.blocked && !r.retry).map(({ c, res }) => {
               const approvedRow = keep.find((k) => k.c.id === c.id);
               const dup = res.ok && !approvedRow;
               return {
@@ -302,16 +325,53 @@ export const Route = createFileRoute("/api/public/mercadolivre/prospect-tick")({
                 .eq("id", row.id);
             }
 
-            processed += chunk.length;
-            await db
-              .from("ml_prospect_jobs")
-              .update({
-                processed: Number(job.processed ?? 0) + processed,
-                found,
-                updated_at: new Date().toISOString(),
-              })
-              .eq("id", job.id);
-            // Continue in a fresh invocation, keeping counts visible after each six.
+            if (blockedIds.length > 0) {
+              const { error: backError } = await db.from("ml_prospect_candidates").update({ status: "pendente", reason: null }).in("id", blockedIds);
+              if (backError) throw new Error(backError.message);
+            }
+            if (retryIds.length > 0) {
+              const { error: retryError } = await db.from("ml_prospect_candidates").update({ status: "pendente", reason: null }).in("id", retryIds);
+              if (retryError) throw new Error(retryError.message);
+            }
+            processed += chunk.length - blockedIds.length - retryIds.length;
+            const wasBlocked = !!(job.params as Record<string, unknown>)?.["ml_offers_blocked_until"];
+            const update: Record<string, unknown> = {
+              processed: Number(job.processed ?? 0) + processed,
+              found,
+              updated_at: new Date().toISOString(),
+            };
+            if (blockedIds.length > 0) {
+              const retryAt = new Date(Date.now() + ML_OFFERS_RETRY_MS);
+              // Guia "Erro 403" do ML: confere aplicativo, conta e a mesma consulta sem token para achar a causa.
+              const detail = results.find((r) => r.blocked && r.detail)?.detail ?? null;
+              let block: Record<string, unknown> | null = null;
+              if (detail) {
+                const { diagnoseMl403 } = await import("@/lib/ml-403.server");
+                const { ml403Summary } = await import("@/lib/ml-403");
+                const why = await diagnoseMl403(token, detail).catch(() => null);
+                block = {
+                  at: new Date().toISOString(), path: detail.path, code: detail.code, message: detail.message,
+                  blocked_by: detail.blockedBy, request_id: detail.requestId,
+                  reason: why?.reason ?? null, text: why ? ml403Summary(why) : null, diagnosis: why?.diagnosis ?? null,
+                };
+              }
+              job.params = { ...job.params, ml_offers_blocked_until: retryAt.toISOString(), ...(block ? { ml_offers_block: block } : {}) };
+              update["params"] = job.params;
+              update["error"] = offersBlockedMessage(retryAt, (block?.["text"] as string | null) ?? null);
+            } else if (wasBlocked) {
+              const { ml_offers_blocked_until: _drop, ml_offers_block: _dropBlock, ...rest } = job.params as Record<string, unknown>;
+              job.params = rest;
+              update["params"] = rest;
+              update["error"] = null;
+            } else if (retryIds.length < chunk.length && job.error) {
+              update["error"] = null;
+            }
+            await db.from("ml_prospect_jobs").update(update).eq("id", job.id);
+            if (blockedIds.length > 0) {
+              // Sem novo ciclo agora: o vigia retoma depois da pausa.
+              return Response.json({ ok: true, paused: "ml_offers_blocked", processed, found });
+            }
+            // Continue in a fresh invocation, keeping counts visible after each chunk.
             break;
           }
           break;
