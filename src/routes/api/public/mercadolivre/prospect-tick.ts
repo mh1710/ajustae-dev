@@ -79,6 +79,24 @@ export const Route = createFileRoute("/api/public/mercadolivre/prospect-tick")({
           return Response.json({ ok: true, cancelled: true });
         }
 
+        // Garimpo pela Amazon: um ciclo = uma página da busca + uma consulta de ofertas Prime.
+        if (job.params?.source === "amazon") {
+          if (job.status === "pendente") {
+            await db.from("ml_prospect_jobs").update({ status: "processando", started_at: new Date().toISOString(), updated_at: new Date().toISOString() }).eq("id", job.id);
+          }
+          try {
+            const { runAmazonProspectTick } = await import("@/lib/amazon-prospect.server");
+            const res = await runAmazonProspectTick(db, job);
+            if (res.status === "concluido") { await finish("concluido", res.message); return Response.json({ ok: true, finished: true }); }
+            if (res.status === "aguardando") await db.from("ml_prospect_jobs").update({ error: res.message ?? null, updated_at: new Date().toISOString() }).eq("id", job.id);
+            await enqueueTick();
+            return Response.json({ ok: true, continues: true });
+          } catch (e) {
+            await finish("erro", e instanceof Error ? e.message : String(e));
+            return Response.json({ ok: false });
+          }
+        }
+
         // ML bloqueou a lista de ofertas: espera a pausa acabar (o vigia chama a cada minuto).
         if (offersStillBlocked(job.params, Date.now())) {
           return Response.json({ ok: true, waiting: "ml_offers_blocked" });

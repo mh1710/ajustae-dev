@@ -33,6 +33,8 @@ export const startProspect = createServerFn({ method: "POST" })
   .inputValidator((data: unknown) =>
     z
       .object({
+        source: z.enum(["mercadolivre", "amazon"]).default("mercadolivre"),
+        departments: z.array(z.string().regex(/^\d+$/)).default([]),
         categories: z.array(z.string().trim().min(1)).default([]),
         all_categories: z.boolean().default(false),
         keywords: z.array(z.string().trim().min(1)).default([]),
@@ -60,6 +62,18 @@ export const startProspect = createServerFn({ method: "POST" })
       .maybeSingle();
     if (running?.id) return { job_id: running.id as string, already_running: true };
 
+    let params: Record<string, unknown>;
+    if (data.source === "amazon") {
+      const { amazonConfigured } = await import("@/lib/amazon-catalog.server");
+      if (!amazonConfigured()) throw new Error("A conexão com a Amazon não está configurada.");
+      const { AMAZON_DEPARTMENTS } = await import("@/lib/amazon-prospect");
+      const departments = data.all_categories ? [] : data.departments.filter(id => AMAZON_DEPARTMENTS.some(d => d.id === id));
+      params = {
+        source: "amazon", departments, all_categories: departments.length === 0 && data.keywords.length === 0,
+        keywords: data.keywords, categories: [], max_cost: data.max_cost, max_weight_kg: data.max_weight_kg, max_length_cm: data.max_length_cm,
+        require_measures: data.quick_collect ? false : data.require_measures, quick_collect: data.quick_collect, shipping_mode: "prime", zip_code: DEFAULT_ZIP,
+      };
+    } else {
     const allCategories = usesAllProspectCategories(data.categories, data.keywords, data.all_categories);
     let categoryIds = data.categories;
     if (allCategories) {
@@ -71,7 +85,7 @@ export const startProspect = createServerFn({ method: "POST" })
       if (!categoryIds.length) throw new Error("Nenhuma categoria de objetos disponível para consulta.");
     }
 
-    const params = {
+    params = {
       categories: categoryIds,
       all_categories: allCategories,
       keywords: data.keywords,
@@ -84,6 +98,7 @@ export const startProspect = createServerFn({ method: "POST" })
       max_delivery_days: data.max_delivery_days,
       zip_code: data.zip_code ? data.zip_code.replace(/\D/g, "") : DEFAULT_ZIP,
     };
+    }
 
     const { data: job, error } = await db
       .from("ml_prospect_jobs")
@@ -189,8 +204,12 @@ export const importProspectItems = createServerFn({ method: "POST" })
     // Offer, price and delivery are rechecked live; measures gathered in preparation/review fill what ML omits.
     const { MlProspectAccessError } = await import("@/lib/ml-prospect.server");
     const { isOffersListPath } = await import("@/lib/ml-prospect-block");
-    const mlToken = await getMlAccessToken();
-    const fresh = await evaluateCandidate(mlToken, item.catalog_product_id, { ...job.params, require_measures: false }).catch(async (e) => {
+    const { isAmazonProspect } = await import("@/lib/amazon-prospect");
+    const amazon = isAmazonProspect(item);
+    const fresh = amazon
+      ? await (await import("@/lib/amazon-prospect.server")).freshAmazonOffer(item, job.params)
+      : await evaluateCandidate(await getMlAccessToken(), item.catalog_product_id, { ...job.params, require_measures: false }).catch(async (e) => {
+      const mlToken = await getMlAccessToken();
       if (e instanceof MlProspectAccessError && isOffersListPath(e.path)) {
         const { diagnoseMl403 } = await import("@/lib/ml-403.server");
         const { ml403Summary } = await import("@/lib/ml-403");
@@ -217,8 +236,8 @@ export const importProspectItems = createServerFn({ method: "POST" })
     const { error: refreshError } = await db.from("ml_prospect_items").update({ ...fresh.row, ...kept.measures, marca: fresh.row.marca || item.marca, pictures, pictures_count: pictures.length, thumbnail: fresh.row.thumbnail ?? pictures[0] ?? null, raw: refreshedRaw }).eq("id", item.id);
     if (refreshError) throw new Error(refreshError.message);
     // The ML prefix needs its supplier contact in this company's Bling before the product can be linked.
-    const { ensureMlSupplier } = await import("@/lib/ml-prospect-supplier.server");
-    await ensureMlSupplier(data.company_id, { create: true });
+    const { ensureProspectSupplier } = await import("@/lib/ml-prospect-supplier.server");
+    await ensureProspectSupplier(data.company_id, { create: true }, amazon ? "amazon" : "mercadolivre");
     const { data: snapshot, error: snapshotError } = await db.from("ml_prospect_items").select("*").eq("id", item.id).single();
     if (snapshotError) throw new Error(snapshotError.message);
     const approval = await reviewProspect(data.company_id, snapshot, true);
@@ -226,7 +245,7 @@ export const importProspectItems = createServerFn({ method: "POST" })
     const { error: approvalError } = await db.from("ml_prospect_approvals").upsert({ company_id: data.company_id, item_id: item.id, item_snapshot: snapshot, sale_price: approval.price, expires_at: new Date(Date.now() + 120_000).toISOString() });
     if (approvalError) throw new Error(approvalError.message);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { data: res, error } = await (context.supabase as any).rpc("import_ml_prospect_items", {
+    const { data: res, error } = await (context.supabase as any).rpc(amazon ? "import_amazon_prospect_items" : "import_ml_prospect_items", {
       _company_id: data.company_id,
       _item_ids: data.item_ids,
     });
@@ -235,7 +254,9 @@ export const importProspectItems = createServerFn({ method: "POST" })
     const createdIds = Array.isArray((res as { product_ids?: unknown })?.product_ids) ? (res as { product_ids: string[] }).product_ids : [];
     try {
       const { refreshProspectStock } = await import("@/lib/ml-prospect-stock.server");
-      await refreshProspectStock(data.company_id, createdIds);
+      // Amazon products get their stock from the Prime offer checked a moment ago (import RPC).
+      if (!amazon) await refreshProspectStock(data.company_id, createdIds);
+      else await db.rpc("enqueue_ml_prospect_stock", { _company_id: data.company_id, _product_ids: createdIds });
     } catch { /* stock computed at import stays; the daily refresh rechecks */ }
 
     const base = (process.env.APP_PUBLIC_URL ?? "").replace(/\/$/, "");
@@ -265,7 +286,7 @@ export const importProspectItems = createServerFn({ method: "POST" })
       const { data: forn } = await adminAny
         .from("fornecedores")
         .select("id")
-        .eq("codigo", "mercadolivre")
+        .eq("codigo", amazon ? "amazon" : "mercadolivre")
         .maybeSingle();
       if (forn?.id) {
         const { count } = await adminAny

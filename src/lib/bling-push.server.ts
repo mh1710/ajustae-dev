@@ -182,7 +182,7 @@ export async function buildFullProductPayload(productId: string): Promise<Record
   const payload: Record<string, unknown> = {};
   const nome = toStr(p.nome); if (nome) payload.nome = nome;
   const codigo = toStr(p.codigo); if (codigo) payload.codigo = codigo;
-  if (p.source === "copia_empresa" || p.source === "garimpo_ml" || p.source === "catalogo_fornecedor") {
+  if (p.source === "copia_empresa" || p.source === "garimpo_ml" || p.source === "garimpo_amz" || p.source === "catalogo_fornecedor") {
     const { data: supplier, error } = await supabaseAdmin.rpc("resolve_import_product_supplier" as never, {
       _company_id:p.company_id, _sku:p.codigo, _fallback_cost:p.preco_custo, _fallback_name:p.nome,
     } as never);

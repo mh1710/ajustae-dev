@@ -29,7 +29,9 @@ export function prospectRequiredIssues(row: Record<string, any>): ProspectIssue[
   for (const key of ["weight_kg", "length_cm", "width_cm", "height_cm"]) {
     if (!(Number(row[key]) > 0)) issues.push({ rule: "dimensoes-peso-obrigatorios", message: `Peso/medida pendente: ${key}.` });
   }
-  if (!prospectShippingMatches(row.raw?.shipping_mode, row.is_full === true, row.arrives_tomorrow === true, prospectDeliveryMatches(row.delivery_date, row.raw?.max_delivery_days)) || !(Number(row.available_quantity) > 0))
+  // Amazon: the rule is the Prime offer delivered by Amazon itself (no arrival date is published).
+  const amazonOk = row.raw?.source === "amazon" && !!row.raw?.offer && Number(row.available_quantity) > 0;
+  if (row.raw?.source === "amazon" ? !amazonOk : !prospectShippingMatches(row.raw?.shipping_mode, row.is_full === true, row.arrives_tomorrow === true, prospectDeliveryMatches(row.delivery_date, row.raw?.max_delivery_days)) || !(Number(row.available_quantity) > 0))
     issues.push({ rule: "oferta-ml", message: "Oferta com estoque não atende ao envio escolhido no garimpo." });
   const anatel = String(row.raw?.review?.anatel ?? "").trim();
   if (!row.raw?.review?.anatel_confirmed || !(/^(\d{5}-\d{2}-\d{5}|Não se aplica)$/i.test(anatel)))

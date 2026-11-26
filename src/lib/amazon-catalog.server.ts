@@ -42,3 +42,50 @@ export async function lookupAmazonByEan(ean: string): Promise<AmazonProduct | nu
   }
   throw new Error("Amazon ocupada (limite de consultas); tente de novo.");
 }
+
+async function amazonFetch(path: string, init: RequestInit = {}, attempts = 4, waitMs = 1000): Promise<any> {
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    const res = await fetch(`${HOST}${path}`, { ...init, headers: { "x-amz-access-token": await accessToken(), accept: "application/json", "content-type": "application/json", ...(init.headers ?? {}) } });
+    if (res.status === 429 || res.status >= 500) { await new Promise(r => setTimeout(r, waitMs * (attempt + 1) + Math.random() * 300)); continue; }
+    if (res.status === 401 || res.status === 403) { cached = null; throw new Error(`Amazon negou a consulta (${res.status}).`); }
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(`Amazon respondeu ${res.status}: ${String((json as any)?.errors?.[0]?.message ?? "")}`.trim());
+    return json;
+  }
+  throw new AmazonBusyError();
+}
+
+export class AmazonBusyError extends Error {
+  constructor() { super("Amazon ocupada (limite de consultas); tentando de novo em seguida."); }
+}
+
+/** One page (20 items) of the Amazon Brasil catalog search with everything the garimpo needs. */
+export async function searchAmazonCatalog(keyword: string, classificationId: string | null, pageToken: string | null) {
+  const params = new URLSearchParams({
+    marketplaceIds: AMAZON_BR_MARKETPLACE, keywords: keyword, locale: "pt_BR", pageSize: "20",
+    includedData: "summaries,attributes,images,identifiers,classifications,salesRanks",
+  });
+  if (classificationId) params.set("classificationIds", classificationId);
+  if (pageToken) params.set("pageToken", pageToken);
+  const json = await amazonFetch(`/catalog/2022-04-01/items?${params}`);
+  return { items: (Array.isArray(json?.items) ? json.items : []) as any[], nextToken: (json?.pagination?.nextToken as string | undefined) ?? null };
+}
+
+/**
+ * Offers of up to 20 ASINs in one call (getItemOffersBatch: about one call every 10 s).
+ * Returns the raw offers payload per ASIN; ASINs that failed are absent.
+ */
+export async function amazonOffersBatch(asins: string[]): Promise<Map<string, unknown>> {
+  const out = new Map<string, unknown>();
+  if (!asins.length) return out;
+  const json = await amazonFetch("/batches/products/pricing/v0/itemOffers", {
+    method: "POST",
+    body: JSON.stringify({ requests: asins.slice(0, 20).map(a => ({ uri: `/products/pricing/v0/items/${a}/offers`, method: "GET", MarketplaceId: AMAZON_BR_MARKETPLACE, ItemCondition: "New", CustomerType: "Consumer" })) }),
+  }, 3, 10_000);
+  for (const r of (Array.isArray(json?.responses) ? json.responses : []) as any[]) {
+    const payload = r?.body?.payload;
+    const asin = String(payload?.ASIN ?? r?.request?.Asin ?? "");
+    if (r?.status?.statusCode === 200 && asin) out.set(asin, payload);
+  }
+  return out;
+}

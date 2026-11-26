@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { AMAZON_DEPARTMENTS, prospectSku } from "@/lib/amazon-prospect";
 import { offersStillBlocked } from "@/lib/ml-prospect-block";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
@@ -84,6 +85,9 @@ export function MlProspectTab({ companyId }: { companyId: string | null }) {
 
   const [selected, setSelected] = useState<string[]>([]);
   const [allCategories, setAllCategories] = useState(false);
+  const [source, setSource] = useState<"mercadolivre" | "amazon">("amazon");
+  const [departments, setDepartments] = useState<string[]>([]);
+  const isAmazon = source === "amazon";
   const [keywords, setKeywords] = useState("");
   const [target, setTarget] = useState(100);
   const [maxCost, setMaxCost] = useState(1000);
@@ -153,7 +157,7 @@ export function MlProspectTab({ companyId }: { companyId: string | null }) {
   );
 
   const start = async () => {
-    if (!/^\d{5}-?\d{3}$/.test(zipCode.trim())) {
+    if (!isAmazon && !/^\d{5}-?\d{3}$/.test(zipCode.trim())) {
       toast.error("Informe um CEP válido com oito dígitos.");
       return;
     }
@@ -161,7 +165,9 @@ export function MlProspectTab({ companyId }: { companyId: string | null }) {
     try {
       const res = await doStart({
         data: {
-          categories: allCategories ? [] : selected,
+          source,
+          departments: allCategories ? [] : departments,
+          categories: allCategories || isAmazon ? [] : selected,
           all_categories: allCategories,
           keywords: keywords
             .split(/[,;\n]/)
@@ -278,7 +284,7 @@ export function MlProspectTab({ companyId }: { companyId: string | null }) {
             <Pickaxe className="h-5 w-5" /> Garimpo de produtos
           </CardTitle>
           <CardDescription>
-            Procura no Mercado Livre produtos que a conta ainda não tem, com entrega
+            Procura na Amazon (só ofertas Prime entregues pela Amazon) ou no Mercado Livre produtos que a conta ainda não tem, com entrega
             conforme a modalidade escolhida, dentro do custo, peso e comprimento definidos. Não traz medicamentos (na coleta rápida só prazo, preço e EAN filtram).
             Cadastro no Bling somente após revisão e aprovação em todas as regras ativas, incluindo fotos.
           </CardDescription>
@@ -325,7 +331,19 @@ export function MlProspectTab({ companyId }: { companyId: string | null }) {
             </div>
           </div>
 
-          <div className="grid gap-3 sm:grid-cols-3">
+          <div className="space-y-2">
+            <Label htmlFor="prospect-source">Onde garimpar</Label>
+            <Select value={source} onValueChange={v => { if (v === "amazon" || v === "mercadolivre") setSource(v); }} disabled={starting || running}>
+              <SelectTrigger id="prospect-source"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="amazon">Amazon — só Prime (código AMZ + EAN)</SelectItem>
+                <SelectItem value="mercadolivre">Mercado Livre</SelectItem>
+              </SelectContent>
+            </Select>
+            {isAmazon && <p className="text-xs text-muted-foreground">Custo = menor oferta Prime entregue pela própria Amazon. A Amazon não informa a data de chegada; o Prime garante o envio rápido. Estoque diário pela Amazon, até 10 unidades.</p>}
+          </div>
+
+          {!isAmazon && <div className="grid gap-3 sm:grid-cols-3">
             <div className="space-y-2">
             <Label htmlFor="prospect-shipping">Envio</Label>
             <Select value={shippingMode} onValueChange={v => { if (v === "full" || v === "tomorrow" || v === "two_days" || v === "deadline") setShippingMode(v); }} disabled={starting || running}>
@@ -346,7 +364,7 @@ export function MlProspectTab({ companyId }: { companyId: string | null }) {
               <Label htmlFor="prospect-days">Chegada em até (dias corridos)</Label>
               <Input id="prospect-days" type="number" min={1} max={30} step={1} value={shippingMode === "two_days" ? 2 : maxDeliveryDays} onChange={e => setMaxDeliveryDays(Math.min(30, Math.max(1, Math.floor(Number(e.target.value) || 1))))} disabled={shippingMode !== "deadline" || starting || running} />
             </div>
-          </div>
+          </div>}
 
           <label className="flex items-start gap-2 text-sm">
             <Checkbox
@@ -383,7 +401,7 @@ export function MlProspectTab({ companyId }: { companyId: string | null }) {
           </div>
 
           <div>
-            <Label htmlFor="prospect-categories">Categorias (mais vendidos)</Label>
+            <Label htmlFor="prospect-categories">{isAmazon ? "Departamentos da Amazon" : "Categorias (mais vendidos)"}</Label>
             <Select value={allCategories ? "all" : "selected"} onValueChange={v => setAllCategories(v === "all")} disabled={starting || running}>
               <SelectTrigger id="prospect-categories" className="mt-2"><SelectValue /></SelectTrigger>
               <SelectContent>
@@ -392,7 +410,18 @@ export function MlProspectTab({ companyId }: { companyId: string | null }) {
               </SelectContent>
             </Select>
             <p className="mt-2 text-sm text-muted-foreground">Medicamentos, suplementos, alimentos e bebidas excluídos.</p>
-            {!allCategories && (categories.isLoading ? (
+            {!allCategories && isAmazon && (
+              <div className="mt-2 grid max-h-60 gap-2 overflow-auto rounded-md border p-3 sm:grid-cols-3">
+                {AMAZON_DEPARTMENTS.map(d => (
+                  <label key={d.id} className="flex items-center gap-2 text-sm">
+                    <Checkbox checked={departments.includes(d.id)} disabled={starting || running}
+                      onCheckedChange={v => setDepartments(prev => v ? [...prev, d.id] : prev.filter(id => id !== d.id))} />
+                    {d.name}
+                  </label>
+                ))}
+              </div>
+            )}
+            {!allCategories && !isAmazon && (categories.isLoading ? (
               <div className="flex items-center gap-2 py-2 text-sm text-muted-foreground">
                 <Loader2 className="h-4 w-4 animate-spin" /> Carregando categorias…
               </div>
@@ -559,7 +588,7 @@ export function MlProspectTab({ companyId }: { companyId: string | null }) {
                     <div className="truncate font-medium">{r.titulo ?? "—"}</div>
                     <div className="truncate text-xs text-muted-foreground">
                       <span className="font-mono">
-                        {`ML${String(r.catalog_product_id ?? "").replace(/^MLB/i, "")}`}
+                        {prospectSku(r)}
                       </span>
                       {" · "}
                       {r.marca ?? "—"} · {r.category_path ?? r.domain_id ?? "—"}
@@ -590,7 +619,7 @@ export function MlProspectTab({ companyId }: { companyId: string | null }) {
                   <td className="p-2">{r.length_cm ? `${Number(r.length_cm).toFixed(1)} cm` : "—"}</td>
                   <td className="p-2">
                     <Badge variant="secondary">
-                      {r.is_full ? "Full · " : ""}{r.delivery_date ? new Date(r.delivery_date).toLocaleDateString("pt-BR") : "Prazo não informado"}
+                      {r.raw?.source === "amazon" ? "Prime · " : r.is_full ? "Full · " : ""}{r.raw?.source === "amazon" ? "Amazon" : r.delivery_date ? new Date(r.delivery_date).toLocaleDateString("pt-BR") : "Prazo não informado"}
                     </Badge>
                   </td>
                   <td className="whitespace-nowrap p-2 text-right">

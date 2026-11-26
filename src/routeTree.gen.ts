@@ -36,6 +36,7 @@ import { Route as AuthenticatedProdutosRouteImport } from './routes/_authenticat
 import { Route as AuthenticatedRegrasValidacaoRouteImport } from './routes/_authenticated/regras-validacao'
 import { Route as AuthenticatedProdutosSkuRouteImport } from './routes/_authenticated/produtos.$sku'
 import { Route as ApiPublicAiTickRouteImport } from './routes/api/public/ai/tick'
+import { Route as ApiPublicAmazonRefreshTickRouteImport } from './routes/api/public/amazon/refresh-tick'
 import { Route as ApiPublicAutomationsRunRouteImport } from './routes/api/public/automations/run'
 import { Route as ApiPublicAutomationsTickRouteImport } from './routes/api/public/automations/tick'
 import { Route as ApiPublicBlingCallbackRouteImport } from './routes/api/public/bling/callback'
@@ -209,6 +210,12 @@ const ApiPublicAiTickRoute = ApiPublicAiTickRouteImport.update({
   path: '/api/public/ai/tick',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiPublicAmazonRefreshTickRoute =
+  ApiPublicAmazonRefreshTickRouteImport.update({
+    id: '/api/public/amazon/refresh-tick',
+    path: '/api/public/amazon/refresh-tick',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ApiPublicAutomationsRunRoute = ApiPublicAutomationsRunRouteImport.update({
   id: '/api/public/automations/run',
   path: '/api/public/automations/run',
@@ -388,6 +395,7 @@ export interface FileRoutesByFullPath {
   '/regras-validacao': typeof AuthenticatedRegrasValidacaoRoute
   '/produtos/$sku': typeof AuthenticatedProdutosSkuRoute
   '/api/public/ai/tick': typeof ApiPublicAiTickRoute
+  '/api/public/amazon/refresh-tick': typeof ApiPublicAmazonRefreshTickRoute
   '/api/public/automations/run': typeof ApiPublicAutomationsRunRoute
   '/api/public/automations/tick': typeof ApiPublicAutomationsTickRoute
   '/api/public/bling/callback': typeof ApiPublicBlingCallbackRoute
@@ -443,6 +451,7 @@ export interface FileRoutesByTo {
   '/regras-validacao': typeof AuthenticatedRegrasValidacaoRoute
   '/produtos/$sku': typeof AuthenticatedProdutosSkuRoute
   '/api/public/ai/tick': typeof ApiPublicAiTickRoute
+  '/api/public/amazon/refresh-tick': typeof ApiPublicAmazonRefreshTickRoute
   '/api/public/automations/run': typeof ApiPublicAutomationsRunRoute
   '/api/public/automations/tick': typeof ApiPublicAutomationsTickRoute
   '/api/public/bling/callback': typeof ApiPublicBlingCallbackRoute
@@ -500,6 +509,7 @@ export interface FileRoutesById {
   '/_authenticated/regras-validacao': typeof AuthenticatedRegrasValidacaoRoute
   '/_authenticated/produtos/$sku': typeof AuthenticatedProdutosSkuRoute
   '/api/public/ai/tick': typeof ApiPublicAiTickRoute
+  '/api/public/amazon/refresh-tick': typeof ApiPublicAmazonRefreshTickRoute
   '/api/public/automations/run': typeof ApiPublicAutomationsRunRoute
   '/api/public/automations/tick': typeof ApiPublicAutomationsTickRoute
   '/api/public/bling/callback': typeof ApiPublicBlingCallbackRoute
@@ -557,6 +567,7 @@ export interface FileRouteTypes {
     | '/regras-validacao'
     | '/produtos/$sku'
     | '/api/public/ai/tick'
+    | '/api/public/amazon/refresh-tick'
     | '/api/public/automations/run'
     | '/api/public/automations/tick'
     | '/api/public/bling/callback'
@@ -612,6 +623,7 @@ export interface FileRouteTypes {
     | '/regras-validacao'
     | '/produtos/$sku'
     | '/api/public/ai/tick'
+    | '/api/public/amazon/refresh-tick'
     | '/api/public/automations/run'
     | '/api/public/automations/tick'
     | '/api/public/bling/callback'
@@ -668,6 +680,7 @@ export interface FileRouteTypes {
     | '/_authenticated/regras-validacao'
     | '/_authenticated/produtos/$sku'
     | '/api/public/ai/tick'
+    | '/api/public/amazon/refresh-tick'
     | '/api/public/automations/run'
     | '/api/public/automations/tick'
     | '/api/public/bling/callback'
@@ -704,6 +717,7 @@ export interface RootRouteChildren {
   ForgotPasswordRoute: typeof ForgotPasswordRoute
   ResetPasswordRoute: typeof ResetPasswordRoute
   ApiPublicAiTickRoute: typeof ApiPublicAiTickRoute
+  ApiPublicAmazonRefreshTickRoute: typeof ApiPublicAmazonRefreshTickRoute
   ApiPublicAutomationsRunRoute: typeof ApiPublicAutomationsRunRoute
   ApiPublicAutomationsTickRoute: typeof ApiPublicAutomationsTickRoute
   ApiPublicBlingCallbackRoute: typeof ApiPublicBlingCallbackRoute
@@ -922,6 +936,13 @@ declare module '@tanstack/react-router' {
       path: '/api/public/ai/tick'
       fullPath: '/api/public/ai/tick'
       preLoaderRoute: typeof ApiPublicAiTickRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/public/amazon/refresh-tick': {
+      id: '/api/public/amazon/refresh-tick'
+      path: '/api/public/amazon/refresh-tick'
+      fullPath: '/api/public/amazon/refresh-tick'
+      preLoaderRoute: typeof ApiPublicAmazonRefreshTickRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/public/automations/run': {
@@ -1185,6 +1206,7 @@ const rootRouteChildren: RootRouteChildren = {
   ForgotPasswordRoute: ForgotPasswordRoute,
   ResetPasswordRoute: ResetPasswordRoute,
   ApiPublicAiTickRoute: ApiPublicAiTickRoute,
+  ApiPublicAmazonRefreshTickRoute: ApiPublicAmazonRefreshTickRoute,
   ApiPublicAutomationsRunRoute: ApiPublicAutomationsRunRoute,
   ApiPublicAutomationsTickRoute: ApiPublicAutomationsTickRoute,
   ApiPublicBlingCallbackRoute: ApiPublicBlingCallbackRoute,

@@ -50,7 +50,8 @@ function text(item: any, key: string): string | null {
   return v || null;
 }
 
-function eans(item: any): string[] {
+/** Every EAN/GTIN/UPC the Amazon item publishes (identifiers and attributes). */
+export function amazonEans(item: any): string[] {
   const fromIdentifiers = (Array.isArray(item?.identifiers) ? item.identifiers : [])
     .flatMap((g: any) => (Array.isArray(g?.identifiers) ? g.identifiers : []))
     .filter((i: any) => /^(ean|gtin|upc)$/i.test(String(i?.identifierType ?? "")))
@@ -132,7 +133,7 @@ function score(p: AmazonProduct): number {
 
 /** The most complete Amazon item whose identifiers contain exactly this EAN (null when none). */
 export function pickAmazonProduct(ean: string, items: unknown): AmazonProduct | null {
-  const list = (Array.isArray(items) ? items : []).filter((i: any) => eans(i).some(e => sameEan(e, ean)));
+  const list = (Array.isArray(items) ? items : []).filter((i: any) => amazonEans(i).some(e => sameEan(e, ean)));
   const parsed = list.map(parseAmazonItem).filter(p => p.asin);
   parsed.sort((a, b) => score(b) - score(a));
   return parsed[0] ?? null;

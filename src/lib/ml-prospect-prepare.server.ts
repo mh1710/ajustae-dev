@@ -34,8 +34,9 @@ export async function prepareProspect(companyId: string, itemId: string) {
   const { data: job } = await db.from("ml_prospect_jobs").select("params").eq("id", item.job_id).single();
   const params = job?.params ?? {};
   const ean: string | null = /^\d{8,14}$/.test(String(item.ean ?? "")) ? String(item.ean) : null;
-  if (!ean) throw new Error("Produto sem EAN do Mercado Livre; não é possível buscar os dados com segurança.");
+  if (!ean) throw new Error("Produto sem EAN; não é possível buscar os dados com segurança.");
   const raw = item.raw ?? {};
+  const isAmazon = raw.source === "amazon";
   const review = raw.review ?? {};
   const confirmed = review.ncm_confirmed === true && review.anatel_confirmed === true;
   const sources: Record<string, string> = {};
@@ -83,7 +84,7 @@ export async function prepareProspect(companyId: string, itemId: string) {
   // Mercado Livre catalog products publishing the same exact EAN (free, no AI).
   let ml: MlEanData | null = null;
   let mlError: string | null = null;
-  const initialBody = cleanResearchText(catalogDescription(product));
+  const initialBody = cleanResearchText(isAmazon ? String(raw.description ?? "") : catalogDescription(product));
   const needsMl = measureKeys.some(k => !(Number(measures[k]) > 0)) || !marca || initialBody.length < 150 || (Array.isArray(item.pictures) ? item.pictures.length : 0) < 3;
   if (needsMl) {
     try {
@@ -143,12 +144,10 @@ export async function prepareProspect(companyId: string, itemId: string) {
     }
   }
   // Products that clearly cannot transmit (title, category and ML sheet) get "Não se aplica"; others need a sourced code.
+  // User rule: an EAN absent from the Anatel bases means "Não se aplica".
   if (!anatel) {
-    const { prospectMayHaveRadio } = await import("./ml-prospect-anatel");
-    if (!prospectMayHaveRadio({ title: item.titulo, categoryPath: item.category_path, domainId: item.domain_id, attributes: product?.attributes })) {
-      anatel = ANATEL_NOT_APPLICABLE;
-      sources.anatel = "Produto sem rádio/transmissor (título, categoria e ficha do Mercado Livre)";
-    }
+    anatel = ANATEL_NOT_APPLICABLE;
+    sources.anatel = "EAN não consta na base Anatel → Não se aplica";
   }
 
   let body = initialBody;
@@ -187,12 +186,12 @@ export async function prepareProspect(companyId: string, itemId: string) {
   const row = { ...item, ...update };
   let supplierNote: string | null = null;
   try {
-    const { ensureMlSupplier } = await import("./ml-prospect-supplier.server");
-    const supplier = await ensureMlSupplier(companyId, { create: false });
-    if (supplier.status === "ausente") supplierNote = "O fornecedor Mercado Livre (Código ML) será cadastrado no Bling desta empresa ao importar.";
-  } catch (e) { supplierNote = e instanceof Error ? e.message : "Não foi possível conferir o fornecedor Mercado Livre no Bling."; }
+    const { ensureProspectSupplier } = await import("./ml-prospect-supplier.server");
+    const supplier = await ensureProspectSupplier(companyId, { create: false }, isAmazon ? "amazon" : "mercadolivre");
+    if (supplier.status === "ausente") supplierNote = isAmazon ? "O fornecedor Amazon (Código AMZ) será cadastrado no Bling desta empresa ao importar." : "O fornecedor Mercado Livre (Código ML) será cadastrado no Bling desta empresa ao importar.";
+  } catch (e) { supplierNote = e instanceof Error ? e.message : "Não foi possível conferir o fornecedor no Bling."; }
   const blockers = await prospectBlockers(companyId, row, params);
-  return { row, blockers: supplierNote ? [supplierNote, ...blockers.filter(b => !/Fornecedor do prefixo ML/.test(b))] : blockers, notes: supplierNote ? [supplierNote] : [] };
+  return { row, blockers: supplierNote ? [supplierNote, ...blockers.filter(b => !/Fornecedor do prefixo (ML|AMZ)/.test(b))] : blockers, notes: supplierNote ? [supplierNote] : [] };
 }
 
 /** Fields the confirmation screen edits are reported there, so they are not repeated as blockers. */
