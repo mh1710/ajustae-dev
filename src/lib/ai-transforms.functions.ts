@@ -2,6 +2,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { AI_FEATURES_ENABLED, AI_DISABLED_MESSAGE } from "@/lib/ai-features";
+import { descriptionPlainText, descriptionVisibleLength } from "@/lib/description-text";
 
 const FIREWORKS_API_URL = "https://api.fireworks.ai/inference/v1/chat/completions";
 // DeepSeek-V4-Flash: excelente custo x benefício ($0.14/M input, $0.28/M output, 1M contexto)
@@ -37,16 +38,24 @@ async function waitForAiRequestSlot(signal?: AbortSignal) {
   if (waitMs > 0) {
     await new Promise<void>((resolve, reject) => {
       const timer = setTimeout(resolve, waitMs);
-      signal?.addEventListener("abort", () => {
-        clearTimeout(timer);
-        reject(new DOMException("Processamento interrompido.", "AbortError"));
-      }, { once: true });
+      signal?.addEventListener(
+        "abort",
+        () => {
+          clearTimeout(timer);
+          reject(new DOMException("Processamento interrompido.", "AbortError"));
+        },
+        { once: true },
+      );
     });
   }
   lastAiRequestStartedAt = Date.now();
 }
 
-async function callAIExclusive(system: string, user: string, signal?: AbortSignal): Promise<string> {
+async function callAIExclusive(
+  system: string,
+  user: string,
+  signal?: AbortSignal,
+): Promise<string> {
   const key = process.env.FIREWORKS_API_KEY;
   if (!key) throw new Error("FIREWORKS_API_KEY ausente no servidor.");
   for (let attempt = 0; attempt < AI_MAX_ATTEMPTS; attempt++) {
@@ -61,7 +70,7 @@ async function callAIExclusive(system: string, user: string, signal?: AbortSigna
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "Authorization": `Bearer ${key}`,
+          Authorization: `Bearer ${key}`,
         },
         body: JSON.stringify({
           model: MODEL,
@@ -88,48 +97,64 @@ async function callAIExclusive(system: string, user: string, signal?: AbortSigna
     }
     if (res.status === 429) {
       if (attempt === AI_MAX_ATTEMPTS - 1) {
-        throw new Error("Limite de requisições da IA atingido após novas tentativas. O item ficou pendente.");
+        throw new Error(
+          "Limite de requisições da IA atingido após novas tentativas. O item ficou pendente.",
+        );
       }
       const retryAfter = Number(res.headers.get("Retry-After"));
-      const waitMs = Number.isFinite(retryAfter) && retryAfter > 0
-        ? retryAfter * 1_000
-        : 5_000 * 2 ** attempt;
+      const waitMs =
+        Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1_000 : 5_000 * 2 ** attempt;
       aiRequestIntervalMs = Math.min(
         AI_MAX_REQUEST_INTERVAL_MS,
         Math.max(Math.ceil(aiRequestIntervalMs * 1.5), waitMs),
       );
       await new Promise<void>((resolve, reject) => {
         const timer = setTimeout(resolve, waitMs + Math.floor(Math.random() * 500));
-        signal?.addEventListener("abort", () => {
-          clearTimeout(timer);
-          reject(new DOMException("Processamento interrompido.", "AbortError"));
-        }, { once: true });
+        signal?.addEventListener(
+          "abort",
+          () => {
+            clearTimeout(timer);
+            reject(new DOMException("Processamento interrompido.", "AbortError"));
+          },
+          { once: true },
+        );
       });
       continue;
     }
     if (res.status === 401) throw new Error("Chave de API da Fireworks inválida ou ausente.");
     if (res.status === 402) throw new Error("Créditos de IA esgotados na conta Fireworks.");
-    if (!res.ok) throw new Error(`Falha na IA Fireworks (${res.status}): ${(await res.text()).slice(0, 200)}`);
+    if (!res.ok)
+      throw new Error(`Falha na IA Fireworks (${res.status}): ${(await res.text()).slice(0, 200)}`);
     const j = (await res.json()) as any;
     const msg = j?.choices?.[0]?.message;
-    const txt = (typeof msg?.content === "string" && msg.content.trim())
-      ? msg.content
-      : (typeof msg?.reasoning_content === "string" ? "" : undefined);
-    if (typeof txt !== "string" || !txt.trim()) throw new Error("Resposta vazia da IA (raciocínio consumiu os tokens).");
+    const txt =
+      typeof msg?.content === "string" && msg.content.trim()
+        ? msg.content
+        : typeof msg?.reasoning_content === "string"
+          ? ""
+          : undefined;
+    if (typeof txt !== "string" || !txt.trim())
+      throw new Error("Resposta vazia da IA (raciocínio consumiu os tokens).");
     aiRequestIntervalMs = Math.max(AI_MIN_REQUEST_INTERVAL_MS, aiRequestIntervalMs - 100);
     return txt.trim();
   }
   throw new Error("Não foi possível concluir a solicitação à IA.");
-
 }
 
 async function callAI(system: string, user: string, signal?: AbortSignal): Promise<string> {
   const request = aiRequestQueue.then(() => callAIExclusive(system, user, signal));
-  aiRequestQueue = request.then(() => undefined, () => undefined);
+  aiRequestQueue = request.then(
+    () => undefined,
+    () => undefined,
+  );
   return request;
 }
 
-async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+async function mapLimit<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
   const out: R[] = new Array(items.length);
   let i = 0;
   const workers = new Array(Math.min(limit, items.length)).fill(0).map(async () => {
@@ -178,8 +203,6 @@ function hasWarrantyAnatelTerms(value: string) {
    1) LISTAR CANDIDATOS
    ========================================================= */
 
-
-
 export const aiListLongTitleIds = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d: unknown) =>
@@ -227,7 +250,6 @@ export const aiListLongTitleIds = createServerFn({ method: "POST" })
       if (rows.length < PAGE) break;
     }
     return { ids: out };
-
   });
 
 export const aiListWarrantyCandidateIds = createServerFn({ method: "POST" })
@@ -295,7 +317,6 @@ const SYSTEM_SHORTEN =
   "Nunca invente informações nem traduza termos técnicos. " +
   "Responda APENAS com o novo título, sem aspas, sem comentários, sem prefixos.";
 
-
 const SYSTEM_REMOVE_WARRANTY =
   "Você edita descrições curtas de produtos em português (Brasil). " +
   "Remova qualquer frase ou expressão que se refira a GARANTIA (ex.: 'garantia de X meses', 'garantia estendida', " +
@@ -330,7 +351,14 @@ export const aiShortenTitlesBatch = createServerFn({ method: "POST" })
     if (error) throw new Error(error.message);
 
     const system = SYSTEM_SHORTEN.replaceAll("{N}", String(data.max_length));
-    const items: Array<{ id: string; sku: string; before: string; after: string; ok: boolean; error?: string }> = [];
+    const items: Array<{
+      id: string;
+      sku: string;
+      before: string;
+      after: string;
+      ok: boolean;
+      error?: string;
+    }> = [];
     let updated = 0;
 
     await mapLimit(rows ?? [], 1, async (r: any) => {
@@ -351,7 +379,10 @@ export const aiShortenTitlesBatch = createServerFn({ method: "POST" })
           // corta na última palavra completa para não quebrar termos técnicos
           const cut = after.slice(0, data.max_length);
           const sp = cut.lastIndexOf(" ");
-          after = (sp > 20 ? cut.slice(0, sp) : cut).trim().replace(/[-–|,]+$/, "").trim();
+          after = (sp > 20 ? cut.slice(0, sp) : cut)
+            .trim()
+            .replace(/[-–|,]+$/, "")
+            .trim();
         }
         if (!after) throw new Error("IA devolveu vazio.");
         const { error: uErr } = await supabaseAdmin
@@ -401,7 +432,14 @@ export const aiRemoveWarrantyBatch = createServerFn({ method: "POST" })
       .in("id", data.product_ids);
     if (error) throw new Error(error.message);
 
-    const items: Array<{ id: string; sku: string; before: string; after: string; ok: boolean; error?: string }> = [];
+    const items: Array<{
+      id: string;
+      sku: string;
+      before: string;
+      after: string;
+      ok: boolean;
+      error?: string;
+    }> = [];
     let updated = 0;
 
     await mapLimit(rows ?? [], 1, async (r: any) => {
@@ -418,7 +456,11 @@ export const aiRemoveWarrantyBatch = createServerFn({ method: "POST" })
         //    reescrever e re-aplica a limpeza determinística no retorno.
         if (hasWarrantyAnatelTerms(after)) {
           try {
-            const aiOut = await callAI(SYSTEM_REMOVE_WARRANTY, `Descrição curta atual:\n${before}`, signal);
+            const aiOut = await callAI(
+              SYSTEM_REMOVE_WARRANTY,
+              `Descrição curta atual:\n${before}`,
+              signal,
+            );
             const cleaned = removeWarrantyAnatelFragments(
               aiOut.replace(/^["'`]|["'`]$/g, "").trim(),
             );
@@ -489,7 +531,7 @@ export const aiListShortDescriptionIds = createServerFn({ method: "POST" })
     await assertMember(context, data.company_id);
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
     const out: string[] = [];
-    const isShort = (v: string | null | undefined) => (v ?? "").trim().length < data.min_length;
+    const isShort = (v: string | null | undefined) => descriptionVisibleLength(v) < data.min_length;
     if (data.product_ids && data.product_ids.length > 0) {
       for (let i = 0; i < data.product_ids.length; i += 500) {
         const chunk = data.product_ids.slice(i, i + 500);
@@ -548,22 +590,35 @@ export const aiExpandShortDescriptionsBatch = createServerFn({ method: "POST" })
     if (error) throw new Error(error.message);
 
     const system = SYSTEM_EXPAND_SHORT_DESC.replaceAll("N", String(data.min_length));
-    const items: Array<{ id: string; sku: string; before: string; after: string; ok: boolean; error?: string }> = [];
+    const items: Array<{
+      id: string;
+      sku: string;
+      before: string;
+      after: string;
+      ok: boolean;
+      error?: string;
+    }> = [];
     let updated = 0;
 
     await mapLimit(rows ?? [], 1, async (r: any) => {
-      const before = (r.descricao_curta ?? "").toString();
+      const beforeRaw = (r.descricao_curta ?? "").toString();
+      const before = descriptionPlainText(beforeRaw);
       const nome = (r.nome ?? "").toString();
-      if (before.trim().length >= data.min_length) {
+      if (descriptionVisibleLength(beforeRaw) >= data.min_length) {
         items.push({ id: r.id, sku: r.codigo ?? "", before, after: before, ok: true });
         return;
       }
       try {
         const userMsg =
           `Nome do produto:\n${nome}\n\n` +
-          `Descrição curta atual (${before.trim().length} chars):\n${before || "(vazia)"}`;
+          `Descrição curta atual (${before.length} chars):\n${before || "(vazia)"}`;
         const clean = (t: string) =>
-          t.replace(/^["'`]|["'`]$/g, "").trim().replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+          t
+            .replace(/^["'`]|["'`]$/g, "")
+            .trim()
+            .replace(/[ \t]+\n/g, "\n")
+            .replace(/\n{3,}/g, "\n\n")
+            .trim();
         let after = clean(await callAI(system, userMsg, signal));
         // 2ª tentativa quando o modelo devolve vazio ou curto demais
         if (!after || after.length < Math.floor(data.min_length * 0.9)) {
@@ -645,7 +700,7 @@ export const aiListMissingEanIds = createServerFn({ method: "POST" })
     await assertMember(context, data.company_id);
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
     const out: string[] = [];
-    const empty = (v: unknown) => !((v ?? "").toString().trim());
+    const empty = (v: unknown) => !(v ?? "").toString().trim();
     if (data.product_ids && data.product_ids.length > 0) {
       for (let i = 0; i < data.product_ids.length; i += 500) {
         const chunk = data.product_ids.slice(i, i + 500);
@@ -698,7 +753,14 @@ export const aiFindEanBatch = createServerFn({ method: "POST" })
       .in("id", data.product_ids);
     if (error) throw new Error(error.message);
 
-    const items: Array<{ id: string; sku: string; before: string; after: string; ok: boolean; error?: string }> = [];
+    const items: Array<{
+      id: string;
+      sku: string;
+      before: string;
+      after: string;
+      ok: boolean;
+      error?: string;
+    }> = [];
     let updated = 0;
 
     await mapLimit(rows ?? [], 1, async (r: any) => {
@@ -730,9 +792,11 @@ export const aiFindEanBatch = createServerFn({ method: "POST" })
             signal,
           );
           candidate = out.replace(/\D/g, "");
-          if (/desconhecido/i.test(out) || !candidate) throw new Error("IA não encontrou o EAN deste produto.");
+          if (/desconhecido/i.test(out) || !candidate)
+            throw new Error("IA não encontrou o EAN deste produto.");
         }
-        if (!isValidGtin(candidate)) throw new Error("Código retornado é inválido (dígito verificador).");
+        if (!isValidGtin(candidate))
+          throw new Error("Código retornado é inválido (dígito verificador).");
 
         const { error: uErr } = await supabaseAdmin
           .from("bling_products")

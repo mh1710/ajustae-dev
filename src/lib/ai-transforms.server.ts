@@ -6,6 +6,7 @@
  * execução interrompida continue exatamente de onde parou.
  */
 import { AI_FEATURES_ENABLED, AI_DISABLED_MESSAGE } from "@/lib/ai-features";
+import { descriptionPlainText, descriptionVisibleLength } from "@/lib/description-text";
 
 const FIREWORKS_API_URL = "https://api.fireworks.ai/inference/v1/chat/completions";
 const MODEL = "accounts/fireworks/models/deepseek-v4p1-flash";
@@ -56,7 +57,10 @@ export function currentAiConcurrency() {
 export class AiCreditsError extends Error {}
 /** Limite de requisições persistente: estaciona até a próxima rodada. */
 export class AiRateLimitError extends Error {
-  constructor(message: string, readonly retryInSeconds: number) {
+  constructor(
+    message: string,
+    readonly retryInSeconds: number,
+  ) {
     super(message);
   }
 }
@@ -118,10 +122,16 @@ async function callAIExclusive(system: string, user: string): Promise<string> {
         Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1_000 : 3_000 * 2 ** attempt;
       aiRequestIntervalMs = Math.min(
         AI_MAX_REQUEST_INTERVAL_MS,
-        Math.max(Math.ceil(aiRequestIntervalMs * 1.5), Math.min(waitMs, AI_MAX_REQUEST_INTERVAL_MS)),
+        Math.max(
+          Math.ceil(aiRequestIntervalMs * 1.5),
+          Math.min(waitMs, AI_MAX_REQUEST_INTERVAL_MS),
+        ),
       );
       // Menos chamadas simultâneas na hora: é o que realmente faz o 429 parar.
-      aiConcurrency = Math.max(AI_MIN_CONCURRENCY, Math.floor(aiConcurrency / 2) || AI_MIN_CONCURRENCY);
+      aiConcurrency = Math.max(
+        AI_MIN_CONCURRENCY,
+        Math.floor(aiConcurrency / 2) || AI_MIN_CONCURRENCY,
+      );
       aiSuccessStreak = 0;
       if (attempt === AI_MAX_ATTEMPTS - 1) {
         throw new AiRateLimitError(
@@ -132,11 +142,13 @@ async function callAIExclusive(system: string, user: string): Promise<string> {
       await sleep(waitMs + Math.floor(Math.random() * 400));
       continue;
     }
-    if (res.status === 401) throw new AiCreditsError("Chave de API da Fireworks inválida ou ausente.");
+    if (res.status === 401)
+      throw new AiCreditsError("Chave de API da Fireworks inválida ou ausente.");
     if (res.status === 402 || res.status === 403) {
       throw new AiCreditsError("Créditos de IA esgotados ou acesso bloqueado na conta Fireworks.");
     }
-    if (!res.ok) throw new Error(`Falha na IA (${res.status}): ${(await res.text()).slice(0, 200)}`);
+    if (!res.ok)
+      throw new Error(`Falha na IA (${res.status}): ${(await res.text()).slice(0, 200)}`);
 
     const json = (await res.json()) as any;
     const msg = json?.choices?.[0]?.message;
@@ -198,11 +210,10 @@ const SYSTEM_EXPAND_SHORT_DESC =
   "Enriqueça com palavras-chave naturais e relevantes para SEO (marca, categoria, uso, benefícios), sem repetir termos artificialmente e sem inventar especificações, medidas, prazos, garantias, códigos, compatibilidades ou dados que não estejam no original. " +
   "PROIBIDO EXPLICAR A FUNÇÃO DO PRODUTO SE ELA NÃO ESTIVER EXPLÍCITA: nunca afirme para que serve, como funciona, onde se instala, o que substitui ou o que o produto faz, a menos que isso esteja escrito no nome ou no texto original. " +
   "Se você não tiver certeza absoluta da finalidade do item, NÃO deduza nem suponha: apenas descreva o que está no nome (tipo, marca, modelo, especificações, compatibilidade citada) e complete o texto com o TEXTO PADRÃO DA EMPRESA, sem atribuir função alguma ao produto. " +
-  "O TEXTO PADRÃO DA EMPRESA é exatamente este (use literalmente, sem alterar): \"Nossa loja preza pela qualidade dos nossos produtos e serviços, oferecendo itens selecionados de marcas confiáveis. Consulte sempre as especificações técnicas na descrição para garantir a escolha certa para a sua necessidade.\" " +
+  'O TEXTO PADRÃO DA EMPRESA é exatamente este (use literalmente, sem alterar): "Nossa loja preza pela qualidade dos nossos produtos e serviços, oferecendo itens selecionados de marcas confiáveis. Consulte sempre as especificações técnicas na descrição para garantir a escolha certa para a sua necessidade." ' +
   "Errar a finalidade do produto é uma falha grave; um texto genérico e correto (tipo+marca+modelo+especificações+texto padrão da empresa) é sempre preferível a um texto específico e inventado. " +
   "Escreva em texto puro (sem HTML), tom claro e vendedor, frases completas. " +
   "Responda APENAS com o novo texto da descrição curta, sem aspas, sem comentários, sem prefixos.";
-
 
 const SYSTEM_FIND_EAN =
   "Você é um especialista em catálogos de produtos e códigos de barras GTIN/EAN do varejo brasileiro. " +
@@ -211,7 +222,6 @@ const SYSTEM_FIND_EAN =
   "Regras rígidas: responda APENAS os dígitos do código escolhido, sem espaços, sem texto, sem explicação. " +
   "Se nenhum candidato corresponder com certeza a esse produto específico, responda exatamente: DESCONHECIDO. " +
   "NUNCA invente, estime, corrija ou gere um código que não esteja na lista de candidatos.";
-
 
 export const WARRANTY_ANATEL_RX =
   /(?:garant(?:ia|ias|imos|id[oa]s?)|assegurad[oa]s?|anatel|homologa(?:ção|cao))/i;
@@ -383,9 +393,6 @@ export async function searchEanCandidates(nome: string, marca: string): Promise<
   return [...found.entries()].slice(0, 8).map(([code, context]) => ({ code, context }));
 }
 
-
-
-
 /* ========================= Processamento por produto ========================= */
 
 export type AiJobKind = "shorten_title" | "remove_warranty" | "expand_short_desc" | "find_ean";
@@ -437,7 +444,10 @@ async function processProduct(
     if (after.length > maxLength) {
       const cut = after.slice(0, maxLength);
       const sp = cut.lastIndexOf(" ");
-      after = (sp > 20 ? cut.slice(0, sp) : cut).trim().replace(/[-–|,]+$/, "").trim();
+      after = (sp > 20 ? cut.slice(0, sp) : cut)
+        .trim()
+        .replace(/[-–|,]+$/, "")
+        .trim();
     }
     if (!after) throw new Error("IA devolveu vazio.");
     await patch({ nome: after });
@@ -463,13 +473,14 @@ async function processProduct(
 
   if (kind === "expand_short_desc") {
     const minLength = Number(params.min_length ?? 150);
-    const before = (row.descricao_curta ?? "").toString();
-    if (before.trim().length >= minLength) return false;
+    const beforeRaw = (row.descricao_curta ?? "").toString();
+    const before = descriptionPlainText(beforeRaw);
+    if (descriptionVisibleLength(beforeRaw) >= minLength) return false;
     const nome = (row.nome ?? "").toString();
     const system = SYSTEM_EXPAND_SHORT_DESC.replaceAll("{N}", String(minLength));
     const userMsg =
       `Nome do produto:\n${nome}\n\n` +
-      `Descrição curta atual (${before.trim().length} chars):\n${before || "(vazia)"}`;
+      `Descrição curta atual (${before.length} chars):\n${before || "(vazia)"}`;
     let after = clean(await callAI(system, userMsg));
     if (!after || after.length < Math.floor(minLength * 0.9)) {
       after = clean(
@@ -508,9 +519,7 @@ async function processProduct(
     const marca = (row.marca ?? "").toString();
     const found = await searchEanCandidates(nome, marca);
     if (!found.length) throw new Error("Nenhum código encontrado na web para este produto.");
-    const lista = found
-      .map((c, i) => `${i + 1}) ${c.code} — ${c.context}`)
-      .join("\n");
+    const lista = found.map((c, i) => `${i + 1}) ${c.code} — ${c.context}`).join("\n");
     const out = await callAI(
       SYSTEM_FIND_EAN,
       `Produto: ${nome}${marca ? `\nMarca: ${marca}` : ""}${row.codigo ? `\nSKU interno: ${row.codigo}` : ""}\n\n` +
@@ -548,7 +557,11 @@ type TickResult = {
   paused_reason?: string;
 };
 
-async function loadProducts(admin: any, companyId: string, ids: string[]): Promise<Map<string, ProductRow>> {
+async function loadProducts(
+  admin: any,
+  companyId: string,
+  ids: string[],
+): Promise<Map<string, ProductRow>> {
   const { data, error } = await admin
     .from("bling_products")
     .select("id, codigo, nome, descricao_curta, gtin, marca")
@@ -623,7 +636,11 @@ export async function processAiTransformTick(
         _limit: ITEMS_PER_QUERY,
       });
       if (itemsError) throw new Error(itemsError.message);
-      const list = (items ?? []) as Array<{ item_id: string; product_id: string; tentativas: number }>;
+      const list = (items ?? []) as Array<{
+        item_id: string;
+        product_id: string;
+        tentativas: number;
+      }>;
       if (list.length === 0) break;
 
       const products = await loadProducts(
@@ -735,7 +752,6 @@ export async function processAiTransformTick(
           }
         }),
       );
-
 
       if (status !== "executando") break;
     }

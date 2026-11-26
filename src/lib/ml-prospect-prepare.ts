@@ -6,7 +6,11 @@ export type ProspectResearch = {
   description: string | null;
   identity_note: string | null;
   ncm: { code: string | null; basis: "ean" | "classificacao" | null; source_url: string | null };
-  anatel: { status: "codigo" | "nao_se_aplica" | "nao_encontrado"; code: string | null; source_url: string | null };
+  anatel: {
+    status: "codigo" | "nao_se_aplica" | "nao_encontrado";
+    code: string | null;
+    source_url: string | null;
+  };
   measures: ProspectMeasures & { kind: "embalagem" | "produto" | null; source_url: string | null };
 };
 
@@ -35,7 +39,10 @@ export function researchAnatel(r: ProspectResearch | null): string | null {
 export function researchNcm(r: ProspectResearch | null): { ncm: string; source: string } | null {
   const ncm = normalizeNcm(r?.ncm.code);
   if (!r || !ncm || !r.ncm.source_url) return null;
-  return { ncm, source: `${r.ncm.basis === "ean" ? "Pesquisa pelo EAN" : "Classificação fiscal do tipo de produto"}: ${r.ncm.source_url}` };
+  return {
+    ncm,
+    source: `${r.ncm.basis === "ean" ? "Pesquisa pelo EAN" : "Classificação fiscal do tipo de produto"}: ${r.ncm.source_url}`,
+  };
 }
 
 /** Fill only missing fields with positive values from a cited source; existing values are never replaced. */
@@ -57,7 +64,9 @@ export function fillMeasures(base: ProspectMeasures, r: ProspectResearch | null)
 /** Garimpo never sends products above 30 kg or with a side above 70 cm, whatever the job asked for. */
 export const PROSPECT_MAX_WEIGHT_KG = 30;
 export const PROSPECT_MAX_LENGTH_CM = 70;
-export function prospectLimits(params: { max_weight_kg?: unknown; max_length_cm?: unknown } | null | undefined) {
+export function prospectLimits(
+  params: { max_weight_kg?: unknown; max_length_cm?: unknown } | null | undefined,
+) {
   const w = Number(params?.max_weight_kg);
   const l = Number(params?.max_length_cm);
   return {
@@ -75,18 +84,30 @@ export function fillFromAmazon(base: ProspectMeasures, amazon: { measures: Prosp
   const keys: (keyof ProspectMeasures)[] = [];
   const a = amazon.measures;
   const dims = ["length_cm", "width_cm", "height_cm"] as const;
-  if (dims.every(k => !(Number(base[k]) > 0)) && dims.every(k => Number(a[k]) > 0)) {
-    for (const k of dims) { measures[k] = Number(a[k]); keys.push(k); }
+  if (dims.every((k) => !(Number(base[k]) > 0)) && dims.every((k) => Number(a[k]) > 0)) {
+    for (const k of dims) {
+      measures[k] = Number(a[k]);
+      keys.push(k);
+    }
   }
-  if (!(Number(base.weight_kg) > 0) && Number(a.weight_kg) > 0) { measures.weight_kg = Number(a.weight_kg); keys.push("weight_kg"); }
+  if (!(Number(base.weight_kg) > 0) && Number(a.weight_kg) > 0) {
+    measures.weight_kg = Number(a.weight_kg);
+    keys.push("weight_kg");
+  }
   return { measures, keys };
 }
 
-export function measureLimitIssue(m: ProspectMeasures, maxWeightKg: number, maxLengthCm: number): string | null {
+export function measureLimitIssue(
+  m: ProspectMeasures,
+  maxWeightKg: number,
+  maxLengthCm: number,
+): string | null {
   if (!completeMeasures(m)) return null;
-  if (Number(m.weight_kg) > maxWeightKg) return `Peso ${m.weight_kg} kg acima do limite de ${maxWeightKg} kg do garimpo.`;
+  if (Number(m.weight_kg) > maxWeightKg)
+    return `Peso ${m.weight_kg} kg acima do limite de ${maxWeightKg} kg do garimpo.`;
   const largest = Math.max(Number(m.length_cm), Number(m.width_cm), Number(m.height_cm));
-  if (largest > maxLengthCm) return `Maior medida ${largest} cm acima do limite de ${maxLengthCm} cm do garimpo.`;
+  if (largest > maxLengthCm)
+    return `Maior medida ${largest} cm acima do limite de ${maxLengthCm} cm do garimpo.`;
   return null;
 }
 
@@ -115,28 +136,52 @@ export function cleanResearchText(text: string | null | undefined): string {
 export function buildShortDescription(body: string, anatel: string | null): string {
   // Linhas (<br>, parágrafos, itens) e frases são filtradas separadamente: uma linha
   // "Garantia: 365 dias" sai sozinha, sem levar junto um texto inteiro sem pontuação.
-  const lines = body.replace(/<br\s*\/?>|<\/(?:p|li|div|h\d)>|\r?\n/gi, "\n").replace(/<[^>]+>/g, " ").split("\n")
-    .map(line => line.replace(/\s+/g, " ").trim().split(/(?<=[.!?])\s+/).filter(s => s && !WARRANTY.test(s)).join(" ").trim())
+  const lines = body
+    .replace(/<br\s*\/?>|<\/(?:p|li|div|h\d)>|\r?\n/gi, "\n")
+    .replace(/<[^>]+>/g, " ")
+    .split("\n")
+    .map((line) =>
+      line
+        .replace(/\s+/g, " ")
+        .trim()
+        .split(/(?<=[.!?])\s+/)
+        .filter((s) => s && !WARRANTY.test(s))
+        .join(" ")
+        .trim(),
+    )
     .filter(Boolean);
-  const text = lines.join("<br>");
+  const text = lines.join("\n");
   const code = anatel ?? "a verificar";
-  return `${text}${text ? "<br><br>" : ""}Garantia: 3 meses | Código Anatel: ${code} | Anvisa: Isento`;
+  return `${text}${text ? "\n\n" : ""}Garantia: 3 meses | Código Anatel: ${code} | Anvisa: Isento`;
 }
 
 /** Catalog text published by Mercado Livre for the same catalog product. */
 export function catalogDescription(product: Record<string, any> | null | undefined): string {
   const short = String(product?.short_description?.content ?? "").trim();
-  const features = Array.isArray(product?.main_features) ? product.main_features.map((f: any) => String(f?.text ?? "").trim()).filter(Boolean) : [];
+  const features = Array.isArray(product?.main_features)
+    ? product.main_features.map((f: any) => String(f?.text ?? "").trim()).filter(Boolean)
+    : [];
   return [short, ...features].filter(Boolean).join(" ").slice(0, 2000);
 }
 
 export function catalogAttributes(product: Record<string, any> | null | undefined): string[] {
   const attrs = Array.isArray(product?.attributes) ? product.attributes : [];
-  return attrs.filter((a: any) => a?.value_name).map((a: any) => `${a.name ?? a.id}: ${a.value_name}`);
+  return attrs
+    .filter((a: any) => a?.value_name)
+    .map((a: any) => `${a.name ?? a.id}: ${a.value_name}`);
 }
 
 /** What still needs data before the product can pass the audit. */
-export function missingProspectData(row: { ean?: unknown; ncm?: unknown; marca?: unknown; pictures?: unknown } & Partial<ProspectMeasures>, anatel: string | null, description: string): string[] {
+export function missingProspectData(
+  row: {
+    ean?: unknown;
+    ncm?: unknown;
+    marca?: unknown;
+    pictures?: unknown;
+  } & Partial<ProspectMeasures>,
+  anatel: string | null,
+  description: string,
+): string[] {
   const missing: string[] = [];
   if (!normalizeNcm(row.ncm)) missing.push("NCM");
   if (!anatel) missing.push("Anatel");
@@ -147,7 +192,10 @@ export function missingProspectData(row: { ean?: unknown; ncm?: unknown; marca?:
 }
 
 /** Live ML measures win; fields ML still omits keep the values gathered in preparation or review. */
-export function keepPreparedMeasures(fresh: Partial<ProspectMeasures>, stored: Partial<ProspectMeasures>) {
+export function keepPreparedMeasures(
+  fresh: Partial<ProspectMeasures>,
+  stored: Partial<ProspectMeasures>,
+) {
   const measures = {} as ProspectMeasures;
   for (const key of measureKeys) {
     const live = Number(fresh[key]);

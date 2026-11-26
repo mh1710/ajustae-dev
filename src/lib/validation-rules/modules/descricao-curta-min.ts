@@ -1,4 +1,5 @@
 import type { RuleModule } from "../types";
+import { descriptionVisibleLength } from "../../description-text";
 
 export const descricaoCurtaMinRule: RuleModule = {
   slug: "descricao-curta-minima",
@@ -9,7 +10,7 @@ export const descricaoCurtaMinRule: RuleModule = {
   defaultConfig: { min: 150 },
   evaluate: (p, cfg) => {
     const min = Number((cfg as { min?: number }).min ?? 150);
-    const len = (p.descricao_curta ?? "").trim().length;
+    const len = descriptionVisibleLength(p.descricao_curta);
     return len >= min
       ? { status: "pass" }
       : { status: "error", message: `Descrição curta com ${len} caracteres (mínimo ${min}).` };

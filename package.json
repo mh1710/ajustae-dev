@@ -17,6 +17,7 @@
     "test:unit:direct": "vitest run --config tests/unit/vitest.config.ts",
     "audit:images": "node --env-file=.env scripts/audit-image-propagation.mjs",
     "audit:images:live": "node --env-file=.env scripts/audit-bling-live-images.mjs",
+    "nango:secondary:prepare": "node --env-file=.env --env-file=.env.local scripts/prepare-nango-secondary.mjs",
     "preview": "vite preview",
     "lint": "eslint .",
     "format": "prettier --write ."
